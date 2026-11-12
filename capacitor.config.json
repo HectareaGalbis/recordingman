@@ -1,0 +1,8 @@
+{
+  "appId": "com.hectarea.recordingman",
+  "appName": "RecordingMan",
+  "webDir": "dist/android",
+  "android": {
+    "backgroundColor": "#fafafa"
+  }
+}

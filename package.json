@@ -1,0 +1,62 @@
+{
+  "name": "recordingman",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RecordingMan: web, Android y PC desde un mismo codigo",
+  "author": "Hector Galbis Sanchis",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --mode web",
+    "dev:app": "vite --mode desktop",
+    "build:web": "tsc --noEmit && vite build --mode web",
+    "build:android": "tsc --noEmit && vite build --mode android && cap sync android",
+    "build:desktop": "tsc --noEmit && vite build --mode desktop",
+    "android": "npm run build:android && cap open android",
+    "apk": "npm run build:android && cd android && ./gradlew assembleDebug",
+    "desktop": "npm run build:desktop && electron .",
+    "dist:desktop": "npm run build:desktop && electron-builder",
+    "typecheck": "tsc --noEmit"
+  },
+  "build": {
+    "appId": "com.hectarea.recordingman",
+    "productName": "RecordingMan",
+    "files": [
+      "dist/desktop/**",
+      "electron/**"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Game"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    }
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.0",
+    "electron": "^45.3.1",
+    "electron-builder": "^26.18.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  },
+  "dependencies": {
+    "@capacitor-community/admob": "^8.3.0",
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/share": "^8.0.3"
+  }
+}
