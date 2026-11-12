@@ -1,8 +1,9 @@
 import { actualizarMusica } from '../audio';
 import { NUM_INCLUIDOS, nivelIncluido, nombreIncluido } from '../core/builtin';
 import { codificar, decodificar, extraerCodigo } from '../core/codec';
+import { URL_COMPARTIR } from '../config';
 import { clonar, nivelVacio } from '../core/level';
-import { PUEDE_SALIR, alAbrirUrl, alAtras, anuncio, salir } from '../platform';
+import { PUEDE_REVOCAR, PUEDE_SALIR, alAbrirUrl, alAtras, anuncio, revocarConsentimiento, salir } from '../platform';
 import { miniatura } from '../render';
 import {
   ajustes, alternarFavorito, borrarPropio, favoritos, guardarAjustes, guardarPropio, marcarSuperado, nuevoId, progreso, propios,
@@ -83,6 +84,8 @@ function abrirAjustes() {
         },
       }),
     ),
+    PUEDE_REVOCAR && h('button', { class: 'btn', onclick: revocarConsentimiento }, 'Privacidad y cookies'),
+    h('a', { class: 'nota', href: `${URL_COMPARTIR.replace(/\/+$/, '')}/privacidad.html`, target: '_blank', rel: 'noopener' }, 'Política de privacidad'),
   );
 }
 

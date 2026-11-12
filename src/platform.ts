@@ -80,6 +80,27 @@ function alto(px: number) {
 
 let scriptAdsense = false;
 
+function cargarScriptAdsense() {
+  if (scriptAdsense) return;
+  scriptAdsense = true;
+  const s = document.createElement('script');
+  s.async = true;
+  s.crossOrigin = 'anonymous';
+  s.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(ADSENSE_CLIENTE)}`;
+  document.head.appendChild(s);
+}
+
+export const PUEDE_REVOCAR = __OBJETIVO__ === 'web' && !!ADSENSE_CLIENTE;
+
+export function revocarConsentimiento() {
+  if (!PUEDE_REVOCAR) return;
+  cargarScriptAdsense();
+  const w = window as any;
+  w.googlefc = w.googlefc || {};
+  w.googlefc.callbackQueue = w.googlefc.callbackQueue || [];
+  w.googlefc.callbackQueue.push(() => w.googlefc.showRevocationMessage());
+}
+
 function bloqueAdsense(hueco: HTMLElement, bloque: string) {
   const ins = document.createElement('ins');
   ins.className = 'adsbygoogle';
@@ -87,14 +108,7 @@ function bloqueAdsense(hueco: HTMLElement, bloque: string) {
   ins.dataset.adClient = ADSENSE_CLIENTE;
   ins.dataset.adSlot = bloque;
   hueco.appendChild(ins);
-  if (!scriptAdsense) {
-    scriptAdsense = true;
-    const s = document.createElement('script');
-    s.async = true;
-    s.crossOrigin = 'anonymous';
-    s.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(ADSENSE_CLIENTE)}`;
-    document.head.appendChild(s);
-  }
+  cargarScriptAdsense();
   ((window as any).adsbygoogle = (window as any).adsbygoogle || []).push({});
 }
 
