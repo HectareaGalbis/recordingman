@@ -4,7 +4,7 @@ import { PARAMETRO } from '../core/codec';
 import { Nivel } from '../core/level';
 import { Mono, Sim, TICKS_POR_SEGUNDO } from '../core/sim';
 import { TACTIL, leerEntrada, limpiarEntrada, montarPalanca, pedirGrabar, pedirReiniciar, tecla } from '../input';
-import { PUEDE_COMPARTIR, compartir, copiar } from '../platform';
+import { PUEDE_COMPARTIR, compartir, copiar, huecosAnuncioFin } from '../platform';
 import { Vista } from '../render';
 import { ajustes, alternarFavorito, esFavorito, guardarAjustes } from '../store';
 import { aviso, botonIcono, h } from './dom';
@@ -114,17 +114,23 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
   const mostrarFin = () => {
     finMostrado = true;
     const seg = (sim.ticks / TICKS_POR_SEGUNDO).toFixed(1);
+    const anuncios = huecosAnuncioFin();
     fin.replaceChildren(
-      h('div', { class: 'fin-caja' },
-        h('h2', {}, 'Nivel superado'),
-        h('p', {}, `${sim.grabacionesUsadas} ${sim.grabacionesUsadas === 1 ? 'grabación' : 'grabaciones'} · ${seg} s`),
-        h('div', { class: 'fila centro' },
-          h('button', { class: 'btn', onclick: repetir }, 'Repetir'),
-          ...(op.accionesFin?.() ?? []),
+      h('div', { class: 'fin-contenido' },
+        anuncios.izq,
+        h('div', { class: 'fin-caja' },
+          h('h2', {}, 'Nivel superado'),
+          h('p', {}, `${sim.grabacionesUsadas} ${sim.grabacionesUsadas === 1 ? 'grabación' : 'grabaciones'} · ${seg} s`),
+          h('div', { class: 'fila centro' },
+            h('button', { class: 'btn', onclick: repetir }, 'Repetir'),
+            ...(op.accionesFin?.() ?? []),
+          ),
         ),
+        anuncios.der,
       ),
     );
     fin.hidden = false;
+    anuncios.rellenar();
     op.alCompletar?.();
   };
 

@@ -1,4 +1,4 @@
-import { ADMOB_BANNER, ADMOB_PRUEBAS, ADSENSE_BLOQUE, ADSENSE_CLIENTE } from './config';
+import { ADMOB_BANNER, ADMOB_PRUEBAS, ADSENSE_BLOQUE, ADSENSE_CLIENTE, ADSENSE_FIN_DER, ADSENSE_FIN_IZQ } from './config';
 
 interface Escritorio {
   salir(): void;
@@ -78,23 +78,47 @@ function alto(px: number) {
   document.documentElement.style.setProperty('--anuncio', `${px}px`);
 }
 
-export async function iniciarAnuncios() {
-  if (__OBJETIVO__ === 'web') {
-    if (!ADSENSE_CLIENTE || !ADSENSE_BLOQUE) return;
-    const hueco = document.getElementById('anuncio')!;
-    const ins = document.createElement('ins');
-    ins.className = 'adsbygoogle';
-    ins.style.cssText = 'display:block;width:100%;height:100%';
-    ins.dataset.adClient = ADSENSE_CLIENTE;
-    ins.dataset.adSlot = ADSENSE_BLOQUE;
-    hueco.appendChild(ins);
-    hueco.classList.add('activo');
+let scriptAdsense = false;
+
+function bloqueAdsense(hueco: HTMLElement, bloque: string) {
+  const ins = document.createElement('ins');
+  ins.className = 'adsbygoogle';
+  ins.style.cssText = 'display:block;width:100%;height:100%';
+  ins.dataset.adClient = ADSENSE_CLIENTE;
+  ins.dataset.adSlot = bloque;
+  hueco.appendChild(ins);
+  if (!scriptAdsense) {
+    scriptAdsense = true;
     const s = document.createElement('script');
     s.async = true;
     s.crossOrigin = 'anonymous';
     s.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(ADSENSE_CLIENTE)}`;
     document.head.appendChild(s);
-    ((window as any).adsbygoogle = (window as any).adsbygoogle || []).push({});
+  }
+  ((window as any).adsbygoogle = (window as any).adsbygoogle || []).push({});
+}
+
+export function huecosAnuncioFin(): { izq: HTMLElement | null; der: HTMLElement | null; rellenar: () => void } {
+  const crear = (bloque: string) =>
+    __OBJETIVO__ === 'web' && ADSENSE_CLIENTE && bloque ? Object.assign(document.createElement('div'), { className: 'anuncio-fin' }) : null;
+  const izq = crear(ADSENSE_FIN_IZQ);
+  const der = crear(ADSENSE_FIN_DER);
+  return {
+    izq,
+    der,
+    rellenar: () => {
+      if (izq) bloqueAdsense(izq, ADSENSE_FIN_IZQ);
+      if (der) bloqueAdsense(der, ADSENSE_FIN_DER);
+    },
+  };
+}
+
+export async function iniciarAnuncios() {
+  if (__OBJETIVO__ === 'web') {
+    if (!ADSENSE_CLIENTE || !ADSENSE_BLOQUE) return;
+    const hueco = document.getElementById('anuncio')!;
+    hueco.classList.add('activo');
+    bloqueAdsense(hueco, ADSENSE_BLOQUE);
     return;
   }
   if (__OBJETIVO__ !== 'android') return;
