@@ -6,10 +6,10 @@ import {
 import { Sim } from '../core/sim';
 import { aTexto, desdeTexto } from '../core/text';
 import { TACTIL } from '../input';
-import { PUEDE_COMPARTIR, compartir, copiar } from '../platform';
+import { copiar } from '../platform';
 import { BORDE_MOVIL, C, Vista, dibujarNivel, pinEntrada, pinSalida, simEstatica } from '../render';
 import { aviso, botonIcono, h, icono, modal } from './dom';
-import { montarJuego, urlDeCodigo } from './juego';
+import { compartirNivel, montarJuego } from './juego';
 
 export interface OpcionesEditor {
   alCambiar(n: Nivel): void;
@@ -1141,16 +1141,7 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
   function abrirCompartir() {
     if (!nivel.objetos.some((o) => o.t === 'meta')) return aviso('Añade al menos una meta antes de compartir el nivel');
     if (!nivel.nombre || !nivel.autor) return abrirDatos(() => nivel.nombre && nivel.autor && abrirCompartir());
-    const url = urlDeCodigo(codificar(nivel));
-    const campo = h('input', { type: 'text', readOnly: true, value: url, onfocus: (e: Event) => (e.target as HTMLInputElement).select() });
-    modal('Compartir nivel',
-      h('p', { class: 'nota' }, `«${nivel.nombre}», por ${nivel.autor}. Todo el nivel viaja dentro del enlace (${url.length} caracteres).`),
-      campo,
-      h('div', { class: 'fila fin' },
-        h('button', { class: 'btn', onclick: () => void copiar(url).then((ok) => aviso(ok ? 'Enlace copiado' : 'No se pudo copiar')) }, 'Copiar enlace'),
-        PUEDE_COMPARTIR && h('button', { class: 'btn primario', onclick: () => void compartir(url, nivel.nombre) }, icono('compartir'), 'Compartir'),
-      ),
-    );
+    compartirNivel(codificar(nivel), nivel.nombre, `«${nivel.nombre}», por ${nivel.autor}. `);
   }
 
   function probar() {

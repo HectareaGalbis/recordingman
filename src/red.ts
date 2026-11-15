@@ -1,5 +1,5 @@
 import { URL_COMPARTIR } from './config';
-import { PARAMETRO } from './core/codec';
+import { decodificar } from './core/codec';
 import type { Entrada } from './core/sim';
 
 const SERVIDOR = 'wss://0.peerjs.com/peerjs?key=peerjs';
@@ -13,6 +13,8 @@ const SIN_CONEXION = 'No se pudo conectar con la sala';
 export const MAX_JUGADORES = 8;
 export const LARGO_NOMBRE = 20;
 export const PARAMETRO_SALA = 's';
+export const PARAMETRO_ENVIO = 'e';
+const LARGO_MAX_CODIGO = 200000;
 
 export interface JugadorSala {
   id: number;
@@ -30,8 +32,16 @@ export function extraerSala(entrada: string): string | null {
   return /[?&#]s=([a-z0-9]{6,20})(?![a-z0-9])/.exec(entrada)?.[1] ?? null;
 }
 
-export function urlDeSala(codigo: string, sala: string): string {
-  return `${URL_COMPARTIR.replace(/\/+$/, '')}/?${PARAMETRO}=${codigo}&${PARAMETRO_SALA}=${sala}`;
+export function urlDeSala(sala: string): string {
+  return `${URL_COMPARTIR.replace(/\/+$/, '')}/?${PARAMETRO_SALA}=${sala}`;
+}
+
+export function extraerEnvio(entrada: string): string | null {
+  return /[?&#]e=([a-z0-9]{6,20})(?![a-z0-9])/.exec(entrada)?.[1] ?? null;
+}
+
+export function urlDeEnvio(sala: string): string {
+  return `${URL_COMPARTIR.replace(/\/+$/, '')}/?${PARAMETRO_ENVIO}=${sala}`;
 }
 
 export function limpiarNombre(n: unknown): string {
@@ -158,6 +168,7 @@ export class Anfitrion {
   alCambiar: () => void = () => undefined;
 
   private nombre: string;
+  private codigo: string;
   private senal: Senal | null = null;
   private abriendo: Promise<string> | null = null;
   private remotos: Remoto[] = [];
@@ -169,8 +180,9 @@ export class Anfitrion {
   private bajas: number[] = [];
   private alOcultar = () => this.cerrar();
 
-  constructor(nombre: string) {
+  constructor(nombre: string, codigo = '') {
     this.nombre = limpiarNombre(nombre);
+    this.codigo = codigo;
     window.addEventListener('pagehide', this.alOcultar);
   }
 
@@ -257,6 +269,7 @@ export class Anfitrion {
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') this.baja(r);
     };
+    if (this.codigo) mandar(canal, JSON.stringify({ nv: this.codigo }));
     this.anunciar();
   }
 
@@ -343,6 +356,7 @@ export class Invitado {
   alCambiar: () => void = () => undefined;
   alEmpezar: (s: Sesion) => void = () => undefined;
   alCaer: (motivo: string) => void = () => undefined;
+  alNivel: (codigo: string) => void = () => undefined;
 
   private nombre: string;
   private senal: Senal | null;
@@ -406,7 +420,15 @@ export class Invitado {
   private mensaje(datos: unknown) {
     const m = leer(datos);
     if (Array.isArray(m)) this.cola.push(m);
-    else if (Number.isInteger(m?.f)) this.cola.push(m.f as number);
+    else if (typeof m?.nv === 'string') {
+      if (m.nv.length > LARGO_MAX_CODIGO) return this.caer('El nivel recibido no es válido');
+      try {
+        decodificar(m.nv);
+      } catch (e) {
+        return this.caer((e as Error).message);
+      }
+      this.alNivel(m.nv);
+    } else if (Number.isInteger(m?.f)) this.cola.push(m.f as number);
     else if (Array.isArray(m?.j)) {
       this.lista = (m.j as any[]).slice(0, MAX_JUGADORES).map((x) => ({ id: Number(x?.id), nombre: limpiarNombre(x?.nombre) }));
       this.yo = Number(m.tu);
@@ -463,3 +485,187 @@ export class Invitado {
 }
 
 export type Red = Anfitrion | Invitado;
+
+export class Emisor {
+  sala: string | null = null;
+  recibidos = 0;
+  alCambiar: () => void = () => undefined;
+
+  private codigo: string;
+  private senal: Senal | null = null;
+  private conexiones = new Set<RTCPeerConnection>();
+  private cerrado = false;
+  private alOcultar = () => this.cerrar();
+
+  constructor(codigo: string) {
+    this.codigo = codigo;
+    window.addEventListener('pagehide', this.alOcultar);
+  }
+
+  abrir(): Promise<string> {
+    return new Promise<string>((ok, mal) => {
+      const sala = azar(10);
+      const s = new Senal(PREFIJO + sala);
+      let abierta = false;
+      s.alAbrir = () => {
+        if (this.cerrado) return s.cerrar();
+        abierta = true;
+        this.senal = s;
+        this.sala = sala;
+        ok(sala);
+        this.alCambiar();
+      };
+      s.alMensaje = (m) => {
+        if (m.type === 'OFFER') void this.aceptar(s, m);
+      };
+      s.alCerrar = () => {
+        if (this.senal === s) {
+          this.senal = null;
+          this.sala = null;
+          this.alCambiar();
+        }
+        if (!abierta) mal(new Error('No se pudo abrir la sala'));
+      };
+    });
+  }
+
+  private async aceptar(s: Senal, m: Mensaje) {
+    const sdp = m.payload?.sdp?.sdp;
+    const conexion = m.payload?.connectionId;
+    if (this.cerrado || !m.src || typeof sdp !== 'string' || typeof conexion !== 'string') return;
+    const pc = new RTCPeerConnection(ICE);
+    this.conexiones.add(pc);
+    const fin = () => {
+      clearTimeout(t);
+      this.conexiones.delete(pc);
+      pc.close();
+    };
+    const t = setTimeout(fin, ESPERA_CONEXION * 2);
+    pc.ondatachannel = (ev) => {
+      const canal = ev.channel;
+      canal.onmessage = (e) => {
+        if (leer(e.data)?.ok !== 1) return;
+        fin();
+        this.recibidos++;
+        this.alCambiar();
+      };
+      const enviar = () => mandar(canal, JSON.stringify({ nv: this.codigo }));
+      if (canal.readyState === 'open') enviar();
+      else canal.onopen = enviar;
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed') fin();
+    };
+    try {
+      await pc.setRemoteDescription({ type: 'offer', sdp });
+      await pc.setLocalDescription(await pc.createAnswer());
+      await reunir(pc);
+      if (pc.localDescription) s.enviar('ANSWER', m.src, conexion, pc.localDescription);
+    } catch {
+      fin();
+    }
+  }
+
+  cerrar() {
+    this.cerrado = true;
+    window.removeEventListener('pagehide', this.alOcultar);
+    this.alCambiar = () => undefined;
+    this.senal?.cerrar();
+    this.senal = null;
+    this.sala = null;
+    for (const pc of this.conexiones) pc.close();
+    this.conexiones.clear();
+  }
+}
+
+export class Receptor {
+  readonly nivel: Promise<string>;
+
+  private senal: Senal | null;
+  private pc: RTCPeerConnection;
+  private canal: RTCDataChannel;
+  private espera: number;
+  private hecho = false;
+  private alOcultar = () => this.cerrar();
+
+  constructor(sala: string) {
+    let ok: (codigo: string) => void = () => undefined;
+    let mal: (e: Error) => void = () => undefined;
+    this.nivel = new Promise<string>((a, b) => {
+      ok = a;
+      mal = b;
+    });
+    const caer = (motivo: string) => {
+      if (this.hecho) return;
+      this.hecho = true;
+      this.cerrar();
+      mal(new Error(motivo));
+    };
+    window.addEventListener('pagehide', this.alOcultar);
+    const conexion = 'dc_' + azar(12);
+    const pc = (this.pc = new RTCPeerConnection(ICE));
+    const canal = (this.canal = pc.createDataChannel(conexion));
+    canal.onopen = () => {
+      this.senal?.cerrar();
+      this.senal = null;
+    };
+    canal.onmessage = (ev) => {
+      const c = leer(ev.data)?.nv;
+      if (typeof c !== 'string' || c.length > LARGO_MAX_CODIGO) return caer('El nivel recibido no es válido');
+      try {
+        decodificar(c);
+      } catch (e) {
+        return caer((e as Error).message);
+      }
+      if (this.hecho) return;
+      this.hecho = true;
+      clearTimeout(this.espera);
+      mandar(canal, JSON.stringify({ ok: 1 }));
+      ok(c);
+      setTimeout(() => this.cerrar(), 2000);
+    };
+    canal.onclose = () => caer(SIN_CONEXION);
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed') caer(SIN_CONEXION);
+    };
+
+    const oferta = (async () => {
+      await pc.setLocalDescription(await pc.createOffer());
+      await reunir(pc);
+    })();
+    oferta.catch(() => caer(SIN_CONEXION));
+
+    const s = (this.senal = new Senal(PREFIJO + azar(16)));
+    s.alAbrir = () => {
+      void oferta.then(() => {
+        if (!this.hecho && pc.localDescription) s.enviar('OFFER', PREFIJO + sala, conexion, pc.localDescription);
+      });
+    };
+    s.alMensaje = (m) => {
+      const sdp = m.payload?.sdp?.sdp;
+      if (m.type === 'ANSWER' && typeof sdp === 'string') pc.setRemoteDescription({ type: 'answer', sdp }).catch(() => caer(SIN_CONEXION));
+      else if (m.type === 'EXPIRE') caer('El enlace ya no está disponible: quien lo compartió no está conectado');
+    };
+    s.alCerrar = () => {
+      if (!this.senal) return;
+      caer(SIN_CONEXION);
+    };
+    this.espera = window.setTimeout(() => caer(SIN_CONEXION), ESPERA_CONEXION);
+  }
+
+  cancelar() {
+    this.hecho = true;
+    this.cerrar();
+  }
+
+  private cerrar() {
+    window.removeEventListener('pagehide', this.alOcultar);
+    clearTimeout(this.espera);
+    this.senal?.cerrar();
+    this.senal = null;
+    this.canal.onclose = null;
+    this.canal.onmessage = null;
+    this.pc.onconnectionstatechange = null;
+    this.pc.close();
+  }
+}

@@ -3,10 +3,10 @@ import { nivelIncluido } from '../core/builtin';
 import { PARAMETRO, decodificar, extraerCodigo } from '../core/codec';
 import { Nivel } from '../core/level';
 import { PUEDE_REVOCAR, revocarConsentimiento } from '../platform';
-import { extraerSala } from '../red';
+import { Invitado, Receptor, extraerEnvio, extraerSala } from '../red';
 import { aviso, h } from './dom';
 import { compartirNivel } from './juego';
-import { montarLobby } from './lobby';
+import { conectarSala, montarLobby } from './lobby';
 
 function enlaceApp(codigo: string): string {
   const host = URL_COMPARTIR.replace(/^https?:\/\//, '').replace(/\/+$/, '');
@@ -17,6 +17,42 @@ function enlaceApp(codigo: string): string {
 export function iniciarWeb() {
   const raiz = document.getElementById('app')!;
   const codigo = extraerCodigo(location.search + location.hash);
+  const envio = codigo ? null : extraerEnvio(location.search + location.hash);
+  const sala = codigo || envio ? null : extraerSala(location.search + location.hash);
+  if (sala) {
+    const invitado = conectarSala(sala);
+    const espera = h('div', { class: 'pantalla' }, h('div', { class: 'cuerpo' }, h('p', { class: 'vacio' }, 'Conectando con la sala…')));
+    raiz.appendChild(espera);
+    invitado.alNivel = (c) => {
+      invitado.alNivel = () => undefined;
+      espera.remove();
+      montarWeb(raiz, c, invitado);
+    };
+    invitado.alCaer = (motivo) => {
+      espera.remove();
+      aviso(`${motivo}. Te dejamos el tutorial.`);
+      montarWeb(raiz, null);
+    };
+    return;
+  }
+  if (!envio) return montarWeb(raiz, codigo);
+  const receptor = new Receptor(envio);
+  const espera = h('div', { class: 'pantalla' }, h('div', { class: 'cuerpo' }, h('p', { class: 'vacio' }, 'Recibiendo nivel…')));
+  raiz.appendChild(espera);
+  receptor.nivel.then(
+    (c) => {
+      espera.remove();
+      montarWeb(raiz, c);
+    },
+    (e: Error) => {
+      espera.remove();
+      aviso(`${e.message}. Te dejamos el tutorial.`);
+      montarWeb(raiz, null);
+    },
+  );
+}
+
+function montarWeb(raiz: HTMLElement, codigo: string | null, invitado?: Invitado) {
   let nivel: Nivel | null = null;
   if (codigo) {
     try {
@@ -39,7 +75,8 @@ export function iniciarWeb() {
   montarLobby(raiz, {
     nivel: nivel ?? nivelIncluido(0),
     codigo: compartido,
-    sala: (compartido && extraerSala(location.search + location.hash)) || undefined,
+    sala: (!invitado && compartido && extraerSala(location.search + location.hash)) || undefined,
+    invitado,
     accionesFin: () => {
       const b: HTMLElement[] = [];
       if (compartido) b.push(h('button', { class: 'btn primario', onclick: () => void compartirNivel(compartido, nivel!.nombre) }, 'Compartir'));

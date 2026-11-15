@@ -11,11 +11,16 @@ export interface OpcionesLobby {
   nivel: Nivel;
   codigo?: string;
   sala?: string;
+  invitado?: Invitado;
   alSalir?: () => void;
   accionesFin?: () => HTMLElement[];
 }
 
 let nombre = ajustes.autor;
+
+export function conectarSala(sala: string): Invitado {
+  return new Invitado(sala, nombre);
+}
 
 export function montarLobby(raiz: HTMLElement, op: OpcionesLobby): () => void {
   let red: Red | null = null;
@@ -39,9 +44,9 @@ export function montarLobby(raiz: HTMLElement, op: OpcionesLobby): () => void {
     limpiar = montarJuego(raiz, { nivel: op.nivel, codigo: op.codigo, alSalir: salir, accionesFin: op.accionesFin, sesion });
   };
 
-  const sala = (unirse?: string, error = '') => {
+  const sala = (unirse?: string, error = '', previo?: Invitado) => {
     cerrar();
-    const actual: Red = unirse ? new Invitado(unirse, nombre) : new Anfitrion(nombre);
+    const actual: Red = previo ?? (unirse ? new Invitado(unirse, nombre) : new Anfitrion(nombre, op.codigo));
     red = actual;
 
     const lista = h('ul', { class: 'lobby-jugadores' });
@@ -75,7 +80,7 @@ export function montarLobby(raiz: HTMLElement, op: OpcionesLobby): () => void {
       bInvitar.hidden = !puedeInvitar;
       bEmpezar.hidden = !actual.anfitrion;
       campoEnlace.hidden = !abierta;
-      if (abierta && op.codigo) enlace.value = urlDeSala(op.codigo, abierta);
+      if (abierta) enlace.value = urlDeSala(abierta);
       if (!actual.anfitrion) estado.textContent = actual.conectado ? 'Esperando a que el anfitrión empiece la partida.' : 'Conectando con la sala…';
       else if (abierta) estado.textContent = 'Sala abierta. Pasa el enlace a quien quieras que se una.';
       else estado.textContent = puedeInvitar ? 'Invita a otros jugadores o empieza tú solo.' : '';
@@ -85,7 +90,7 @@ export function montarLobby(raiz: HTMLElement, op: OpcionesLobby): () => void {
       if (!actual.anfitrion || !op.codigo) return;
       bInvitar.disabled = true;
       try {
-        const url = urlDeSala(op.codigo, await actual.abrir());
+        const url = urlDeSala(await actual.abrir());
         if (red !== actual) return;
         pintar();
         if (PUEDE_COMPARTIR && (await compartir(url, titulo))) return;
@@ -138,6 +143,6 @@ export function montarLobby(raiz: HTMLElement, op: OpcionesLobby): () => void {
     pintar();
   };
 
-  sala(op.sala);
+  sala(op.sala, '', op.invitado);
   return cerrar;
 }

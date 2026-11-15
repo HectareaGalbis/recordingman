@@ -5,10 +5,11 @@ import { ALTO, ANCHO, Nivel, TAM_LOGICA } from '../core/level';
 import { Entrada, Sim, TICKS_POR_SEGUNDO } from '../core/sim';
 import { TACTIL, fijarAgarre, leerEntrada, limpiarEntrada, montarPalanca, pedirReiniciar, tecla } from '../input';
 import { PUEDE_COMPARTIR, compartir, copiar, huecosAnuncioFin } from '../platform';
+import { Emisor, urlDeEnvio } from '../red';
 import type { Sesion } from '../red';
 import { Vista } from '../render';
 import { ajustes, alternarFavorito, esFavorito, guardarAjustes } from '../store';
-import { aviso, botonIcono, h } from './dom';
+import { aviso, botonIcono, h, icono, modal } from './dom';
 
 export interface OpcionesJuego {
   nivel: Nivel;
@@ -46,10 +47,66 @@ export function urlDeCodigo(codigo: string): string {
   return `${URL_COMPARTIR.replace(/\/+$/, '')}/?${PARAMETRO}=${codigo}`;
 }
 
-export async function compartirNivel(codigo: string, nombre: string) {
-  const url = urlDeCodigo(codigo);
-  if (PUEDE_COMPARTIR && (await compartir(url, nombre || 'Nivel de RecordingMan'))) return;
-  aviso((await copiar(url)) ? 'Enlace copiado al portapapeles' : 'No se pudo copiar el enlace');
+export function compartirNivel(codigo: string, nombre: string, detalle = '') {
+  const titulo = nombre || 'Nivel de RecordingMan';
+  let emisor: Emisor | null = null;
+  let fallo = '';
+  let url = '';
+  const incluir = h('input', { type: 'checkbox', checked: true, onchange: () => cambiar() });
+  const campo = h('input', { type: 'text', readOnly: true, onfocus: () => campo.select() });
+  const nota = h('p', { class: 'nota' });
+  const estado = h('p', { class: 'nota' });
+  const bCopiar = h('button', { class: 'btn', onclick: () => void copiar(url).then((ok) => aviso(ok ? 'Enlace copiado' : 'No se pudo copiar')) }, 'Copiar enlace');
+  const bCompartir = PUEDE_COMPARTIR ? h('button', { class: 'btn primario', onclick: () => void compartir(url, titulo) }, icono('compartir'), 'Compartir') : null;
+
+  const pintar = () => {
+    const corto = !incluir.checked;
+    url = !corto ? urlDeCodigo(codigo) : emisor?.sala ? urlDeEnvio(emisor.sala) : '';
+    campo.value = url;
+    bCopiar.disabled = !url;
+    if (bCompartir) bCompartir.disabled = !url;
+    nota.textContent = corto
+      ? `${detalle}El enlace solo lleva la sala: el nivel se envía directamente a quien lo abra. Deja esta ventana abierta hasta que lo reciba.`
+      : `${detalle}Todo el nivel viaja dentro del enlace (${url.length} caracteres). Funciona aunque no estés conectado.`;
+    const n = emisor?.recibidos ?? 0;
+    estado.hidden = !corto;
+    estado.textContent = !emisor ? fallo : !emisor.sala ? 'Abriendo sala…' : n ? `Recibido por ${n} ${n === 1 ? 'jugador' : 'jugadores'}.` : 'Esperando a que alguien abra el enlace…';
+  };
+
+  const cambiar = () => {
+    fallo = '';
+    if (incluir.checked) {
+      emisor?.cerrar();
+      emisor = null;
+    } else if (!emisor) {
+      const e = (emisor = new Emisor(codigo));
+      e.alCambiar = pintar;
+      e.abrir().catch((err: Error) => {
+        if (emisor !== e) return;
+        e.cerrar();
+        emisor = null;
+        fallo = err.message;
+        pintar();
+      });
+    }
+    pintar();
+  };
+
+  const m = modal('Compartir nivel',
+    h('label', { class: 'casilla' }, incluir, 'Incluir el nivel en el enlace'),
+    nota,
+    campo,
+    estado,
+    h('div', { class: 'fila fin' }, bCopiar, bCompartir),
+  );
+  const vigia = new MutationObserver(() => {
+    if (m.caja.isConnected) return;
+    vigia.disconnect();
+    emisor?.cerrar();
+    emisor = null;
+  });
+  vigia.observe(document.body, { childList: true });
+  pintar();
 }
 
 export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {

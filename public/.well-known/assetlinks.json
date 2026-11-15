@@ -4,7 +4,7 @@
     "target": {
       "namespace": "android_app",
       "package_name": "com.hectarea.recordingman",
-      "sha256_cert_fingerprints": ["REEMPLAZAR_POR_LA_HUELLA_SHA256_DEL_CERTIFICADO_DE_FIRMA"]
+      "sha256_cert_fingerprints": ["09:79:3F:D0:2E:3D:25:5F:0C:24:20:A5:5A:AC:53:C3:C9:10:CF:7B:F9:5E:45:CF:5D:D1:B0:08:35:7D:3A:0A"]
     }
   }
 ]

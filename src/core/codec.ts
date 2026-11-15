@@ -1,6 +1,9 @@
 import { decimasDesdeVel, FONDO, LIMITES, MODOS_MOVIL, Nivel, OPERACIONES, Objeto, crear, nivelVacio, sanear } from './level';
 
 const VERSION = 2;
+const VERSION_COMPRIMIDA = 3;
+const MAX_DESCOMPRIMIDO = 200000;
+const VENTANA = 4096;
 const F_REJILLA = 1;
 const F_NEGATIVOS = 2;
 const F_LEJANOS = 4;
@@ -74,6 +77,104 @@ class Lector {
     this.i += n;
     return s;
   }
+}
+
+class Bits {
+  b: number[] = [];
+  private acc = 0;
+  private n = 0;
+  bit(v: number) {
+    this.acc = (this.acc << 1) | v;
+    if (++this.n === 8) {
+      this.b.push(this.acc);
+      this.acc = 0;
+      this.n = 0;
+    }
+  }
+  bits(v: number, k: number) {
+    for (let i = k - 1; i >= 0; i--) this.bit((v >> i) & 1);
+  }
+  gamma(v: number) {
+    const k = 31 - Math.clz32(v);
+    for (let i = 0; i < k; i++) this.bit(0);
+    this.bits(v, k + 1);
+  }
+  fin(): number[] {
+    if (this.n) this.b.push(this.acc << (8 - this.n));
+    return this.b;
+  }
+}
+
+function costeGamma(v: number): number {
+  return 2 * (31 - Math.clz32(v)) + 1;
+}
+
+function comprimir(d: number[]): number[] {
+  const largo = new Escritor();
+  largo.num(d.length);
+  const out = new Bits();
+  let i = 0;
+  while (i < d.length) {
+    let mejor = 0;
+    let dist = 0;
+    let ahorro = 0;
+    for (let j = Math.max(0, i - VENTANA); j < i; j++) {
+      let l = 0;
+      while (i + l < d.length && d[j + l] === d[i + l] && l < 255) l++;
+      if (l < 2) continue;
+      const a = 9 * l - (1 + costeGamma(i - j) + costeGamma(l - 1));
+      if (a > ahorro) {
+        ahorro = a;
+        mejor = l;
+        dist = i - j;
+      }
+    }
+    if (mejor) {
+      out.bit(1);
+      out.gamma(dist);
+      out.gamma(mejor - 1);
+      i += mejor;
+    } else {
+      out.bit(0);
+      out.bits(d[i], 8);
+      i++;
+    }
+  }
+  return [...largo.b, ...out.fin()];
+}
+
+function descomprimir(b: Uint8Array): Uint8Array {
+  const r = new Lector(b);
+  const total = r.num();
+  if (total > MAX_DESCOMPRIMIDO) throw new Error('Código de nivel no válido');
+  let pos = r.i * 8;
+  const bit = () => {
+    const k = pos >> 3;
+    if (k >= b.length) throw new Error('Código de nivel incompleto');
+    return (b[k] >> (7 - (pos++ & 7))) & 1;
+  };
+  const gamma = () => {
+    let k = 0;
+    while (!bit()) if (++k > 24) throw new Error('Código de nivel no válido');
+    let v = 1;
+    for (let i = 0; i < k; i++) v = (v << 1) | bit();
+    return v;
+  };
+  const out = new Uint8Array(total);
+  let n = 0;
+  while (n < total) {
+    if (bit()) {
+      const dist = gamma();
+      const l = gamma() + 1;
+      if (dist > n || n + l > total) throw new Error('Código de nivel no válido');
+      for (let k = 0; k < l; k++, n++) out[n] = out[n - dist];
+    } else {
+      let v = 0;
+      for (let k = 0; k < 8; k++) v = (v << 1) | bit();
+      out[n++] = v;
+    }
+  }
+  return out;
 }
 
 function coordenadas(o: Objeto): number[] {
@@ -200,11 +301,19 @@ export function codificar(nivel: Nivel): string {
         break;
     }
   }
-  return aBase64(new Uint8Array(w.b));
+  const comprimido = [VERSION_COMPRIMIDA, ...comprimir(w.b.slice(1))];
+  return aBase64(new Uint8Array(comprimido.length < w.b.length ? comprimido : w.b));
 }
 
 export function decodificar(codigo: string): Nivel {
-  const r = new Lector(deBase64(codigo));
+  let bytes = deBase64(codigo);
+  if (bytes[0] === VERSION_COMPRIMIDA) {
+    const cuerpo = descomprimir(bytes.subarray(1));
+    bytes = new Uint8Array(cuerpo.length + 1);
+    bytes[0] = VERSION;
+    bytes.set(cuerpo, 1);
+  }
+  const r = new Lector(bytes);
   const version = r.byte();
   if (version < 1 || version > VERSION) throw new Error('Este nivel es de una versión más reciente del juego');
   const flags = r.byte();

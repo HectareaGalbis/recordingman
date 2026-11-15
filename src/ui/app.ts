@@ -4,7 +4,7 @@ import { codificar, decodificar, extraerCodigo } from '../core/codec';
 import { URL_COMPARTIR } from '../config';
 import { clonar, nivelVacio } from '../core/level';
 import { PUEDE_REVOCAR, PUEDE_SALIR, alAbrirUrl, alAtras, anuncio, revocarConsentimiento, salir } from '../platform';
-import { extraerSala } from '../red';
+import { Invitado, Receptor, extraerEnvio, extraerSala } from '../red';
 import { miniatura } from '../render';
 import {
   ajustes, alternarFavorito, borrarPropio, favoritos, guardarAjustes, guardarPropio, marcarSuperado, nuevoId, progreso, propios,
@@ -12,7 +12,7 @@ import {
 import { aviso, botonIcono, confirmar, h, icono, modal } from './dom';
 import { montarEditor } from './editor';
 import { compartirNivel, montarJuego } from './juego';
-import { montarLobby } from './lobby';
+import { conectarSala, montarLobby } from './lobby';
 
 const raiz = document.getElementById('app')!;
 let desmontar: (() => void) | null = null;
@@ -129,7 +129,7 @@ function jugarIncluido(i: number) {
   mostrar(el, niveles, false, limpiar);
 }
 
-export function jugarCompartido(codigo: string, volver: () => void = menu, sala?: string) {
+export function jugarCompartido(codigo: string, volver: () => void = menu, sala?: string, invitado?: Invitado) {
   let nivel;
   try {
     nivel = decodificar(codigo);
@@ -142,17 +142,83 @@ export function jugarCompartido(codigo: string, volver: () => void = menu, sala?
     nivel,
     codigo,
     sala,
+    invitado,
     alSalir: volver,
     accionesFin: () => [h('button', { class: 'btn primario', onclick: volver }, 'Continuar')],
   });
   mostrar(el, volver, false, limpiar);
 }
 
-function pedirEnlace(titulo: string, accion: string, alAceptar: (codigo: string, sala?: string) => void) {
+function recibir(sala: string, alRecibir: (codigo: string) => void) {
+  const receptor = new Receptor(sala);
+  const m = modal('Recibiendo nivel',
+    h('p', { class: 'nota' }, 'Conectando con quien lo compartió…'),
+    h('div', { class: 'fila fin' }, h('button', { class: 'btn', onclick: () => m.cerrar() }, 'Cancelar')),
+  );
+  const vigia = new MutationObserver(() => {
+    if (m.caja.isConnected) return;
+    vigia.disconnect();
+    receptor.cancelar();
+  });
+  vigia.observe(document.body, { childList: true });
+  receptor.nivel.then(
+    (c) => {
+      vigia.disconnect();
+      m.cerrar();
+      alRecibir(c);
+    },
+    (e: Error) => {
+      vigia.disconnect();
+      m.cerrar();
+      aviso(e.message);
+    },
+  );
+}
+
+function unirseSala(sala: string, volver: () => void) {
+  const invitado = conectarSala(sala);
+  const m = modal('Uniéndose a la sala',
+    h('p', { class: 'nota' }, 'Conectando con la sala…'),
+    h('div', { class: 'fila fin' }, h('button', { class: 'btn', onclick: () => m.cerrar() }, 'Cancelar')),
+  );
+  const vigia = new MutationObserver(() => {
+    if (m.caja.isConnected) return;
+    vigia.disconnect();
+    invitado.cerrar();
+  });
+  vigia.observe(document.body, { childList: true });
+  invitado.alNivel = (c) => {
+    invitado.alNivel = () => undefined;
+    vigia.disconnect();
+    m.cerrar();
+    jugarCompartido(c, volver, undefined, invitado);
+  };
+  invitado.alCaer = (motivo) => {
+    vigia.disconnect();
+    m.cerrar();
+    aviso(motivo);
+  };
+}
+
+function pedirEnlace(titulo: string, accion: string, alAceptar: (codigo: string, sala?: string) => void, alSala?: (sala: string) => void) {
   const campo = h('input', { type: 'text', placeholder: 'https://…/?l=…', autocomplete: 'off', spellcheck: false });
   const error = h('p', { class: 'error' });
   const aceptar = () => {
     const codigo = extraerCodigo(campo.value);
+    const envio = codigo ? null : extraerEnvio(campo.value);
+    if (envio) {
+      m.cerrar();
+      return recibir(envio, (c) => alAceptar(c));
+    }
+    const sala = codigo ? null : extraerSala(campo.value);
+    if (sala) {
+      if (!alSala) {
+        error.textContent = 'Ese enlace es de una sala multijugador: ábrelo desde Favoritos para jugar';
+        return;
+      }
+      m.cerrar();
+      return alSala(sala);
+    }
     try {
       if (!codigo) throw new Error('Eso no parece un enlace de RecordingMan');
       decodificar(codigo);
@@ -207,7 +273,7 @@ function pantallaFavoritos() {
       ),
     );
   }
-  const anadir = h('button', { class: 'btn primario', onclick: () => pedirEnlace('Añadir desde enlace', 'Jugar', (c, s) => jugarCompartido(c, pantallaFavoritos, s)) }, icono('enlace'), 'Abrir enlace');
+  const anadir = h('button', { class: 'btn primario', onclick: () => pedirEnlace('Añadir desde enlace', 'Jugar', (c, s) => jugarCompartido(c, pantallaFavoritos, s), (s) => unirseSala(s, pantallaFavoritos)) }, icono('enlace'), 'Abrir enlace');
   mostrar(
     h('div', { class: 'pantalla' },
       cabecera('Favoritos', menu, anadir),
@@ -289,5 +355,11 @@ export function iniciarApp() {
   alAbrirUrl((url) => {
     const codigo = extraerCodigo(url);
     if (codigo) jugarCompartido(codigo, menu, extraerSala(url) ?? undefined);
+    else {
+      const envio = extraerEnvio(url);
+      const sala = extraerSala(url);
+      if (envio) recibir(envio, (c) => jugarCompartido(c, menu));
+      else if (sala) unirseSala(sala, menu);
+    }
   });
 }
