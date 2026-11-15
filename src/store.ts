@@ -1,3 +1,5 @@
+import { NUM_INCLUIDOS, nivelIncluido } from './core/builtin';
+import { codificar } from './core/codec';
 import { Nivel } from './core/level';
 
 export interface Ajustes {
@@ -17,6 +19,22 @@ export interface NivelPropio {
   nivel: Nivel;
   modificado: number;
 }
+
+export interface NivelDescargado {
+  id: string;
+  codigo: string;
+  nombre: string;
+  autor: string;
+  anadido: number;
+}
+
+export interface MetaNivel {
+  favorito?: boolean;
+  etiquetas?: string[];
+}
+
+export const LARGO_ETIQUETA = 20;
+export const MAX_ETIQUETAS = 10;
 
 function leer<T>(clave: string, defecto: T): T {
   try {
@@ -55,17 +73,84 @@ export function favoritos(): Favorito[] {
   return leer<Favorito[]>('favoritos', []);
 }
 
+export function descargados(): NivelDescargado[] {
+  const lista = leer<NivelDescargado[] | null>('descargados', null);
+  if (lista) return lista;
+  const ahora = Date.now();
+  const migrados = favoritos().map((f, i) => ({ id: nuevoId() + i, codigo: f.codigo, nombre: f.nombre, autor: f.autor, anadido: ahora - i }));
+  escribir('descargados', migrados);
+  if (migrados.length) {
+    const m = metas();
+    for (const d of migrados) m['d:' + d.id] = { favorito: true };
+    escribir('meta', m);
+  }
+  return migrados;
+}
+
+export function guardarDescargado(codigo: string, nivel: Nivel): string {
+  const clave = claveDeCodigo(codigo);
+  if (clave) return clave;
+  const d: NivelDescargado = { id: nuevoId(), codigo, nombre: nivel.nombre, autor: nivel.autor, anadido: Date.now() };
+  escribir('descargados', [d, ...descargados()]);
+  return 'd:' + d.id;
+}
+
+export function borrarDescargado(id: string) {
+  escribir('descargados', descargados().filter((d) => d.id !== id));
+  borrarMeta('d:' + id);
+}
+
+export function claveDeCodigo(codigo: string): string | null {
+  const d = descargados().find((x) => x.codigo === codigo);
+  if (d) return 'd:' + d.id;
+  const p = propios().find((x) => codificar(x.nivel) === codigo);
+  if (p) return 'p:' + p.id;
+  for (let i = 0; i < NUM_INCLUIDOS; i++) if (codificar(nivelIncluido(i)) === codigo) return 'i:' + i;
+  return null;
+}
+
+export function metas(): Record<string, MetaNivel> {
+  return leer<Record<string, MetaNivel>>('meta', {});
+}
+
+export function meta(clave: string): MetaNivel {
+  return metas()[clave] ?? {};
+}
+
+export function guardarMeta(clave: string, cambio: MetaNivel) {
+  const m = metas();
+  const nuevo = { ...m[clave], ...cambio };
+  if (!nuevo.favorito && !nuevo.etiquetas?.length) delete m[clave];
+  else m[clave] = nuevo;
+  escribir('meta', m);
+}
+
+function borrarMeta(clave: string) {
+  const m = metas();
+  delete m[clave];
+  escribir('meta', m);
+}
+
+export function limpiarEtiqueta(e: string): string {
+  return e.replace(/\s+/g, ' ').trim().slice(0, LARGO_ETIQUETA);
+}
+
+export function todasEtiquetas(): string[] {
+  const vistas = new Map<string, string>();
+  for (const m of Object.values(metas())) for (const e of m.etiquetas ?? []) if (!vistas.has(e.toLowerCase())) vistas.set(e.toLowerCase(), e);
+  return [...vistas.values()].sort((a, b) => a.localeCompare(b, 'es'));
+}
+
 export function esFavorito(codigo: string): boolean {
-  return favoritos().some((f) => f.codigo === codigo);
+  const clave = claveDeCodigo(codigo);
+  return !!clave && !!meta(clave).favorito;
 }
 
 export function alternarFavorito(f: Favorito): boolean {
-  const lista = favoritos();
-  const i = lista.findIndex((x) => x.codigo === f.codigo);
-  if (i >= 0) lista.splice(i, 1);
-  else lista.unshift(f);
-  escribir('favoritos', lista);
-  return i < 0;
+  const clave = claveDeCodigo(f.codigo) ?? guardarDescargado(f.codigo, { nombre: f.nombre, autor: f.autor } as Nivel);
+  const nuevo = !meta(clave).favorito;
+  guardarMeta(clave, { favorito: nuevo });
+  return nuevo;
 }
 
 export function propios(): NivelPropio[] {
@@ -80,6 +165,7 @@ export function guardarPropio(id: string, nivel: Nivel) {
 
 export function borrarPropio(id: string) {
   escribir('propios', propios().filter((p) => p.id !== id));
+  borrarMeta('p:' + id);
 }
 
 export function nuevoId(): string {

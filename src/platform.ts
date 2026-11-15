@@ -1,4 +1,4 @@
-import { ADMOB_BANNER, ADMOB_PRUEBAS, ADSENSE_BLOQUE, ADSENSE_CLIENTE, ADSENSE_FIN_DER, ADSENSE_FIN_IZQ } from './config';
+import { ADMOB_BANNER, ADMOB_PRUEBAS, ADSENSE_CLIENTE, ADSENSE_FIN_DER, ADSENSE_FIN_IZQ, ADSENSE_PORTADA_DER, ADSENSE_PORTADA_IZQ, ADSENSE_PORTADA_MOVIL } from './config';
 
 interface Escritorio {
   salir(): void;
@@ -112,29 +112,36 @@ function bloqueAdsense(hueco: HTMLElement, bloque: string) {
   ((window as any).adsbygoogle = (window as any).adsbygoogle || []).push({});
 }
 
-export function huecosAnuncioFin(): { izq: HTMLElement | null; der: HTMLElement | null; rellenar: () => void } {
+function huecosLaterales(bloqueIzq: string, bloqueDer: string, clase: string): { izq: HTMLElement | null; der: HTMLElement | null; rellenar: () => void } {
   const crear = (bloque: string) =>
-    __OBJETIVO__ === 'web' && ADSENSE_CLIENTE && bloque ? Object.assign(document.createElement('div'), { className: 'anuncio-fin' }) : null;
-  const izq = crear(ADSENSE_FIN_IZQ);
-  const der = crear(ADSENSE_FIN_DER);
+    __OBJETIVO__ === 'web' && ADSENSE_CLIENTE && bloque ? Object.assign(document.createElement('div'), { className: clase }) : null;
+  const izq = crear(bloqueIzq);
+  const der = crear(bloqueDer);
   return {
     izq,
     der,
     rellenar: () => {
-      if (izq) bloqueAdsense(izq, ADSENSE_FIN_IZQ);
-      if (der) bloqueAdsense(der, ADSENSE_FIN_DER);
+      if (izq) bloqueAdsense(izq, bloqueIzq);
+      if (der) bloqueAdsense(der, bloqueDer);
     },
   };
 }
 
+export function huecosAnuncioFin(): { izq: HTMLElement | null; der: HTMLElement | null; rellenar: () => void } {
+  const movil = !matchMedia('(min-width: 760px)').matches;
+  return huecosLaterales(ADSENSE_FIN_IZQ, movil ? '' : ADSENSE_FIN_DER, 'anuncio-fin');
+}
+
+export function huecosAnuncioPortada(): { izq: HTMLElement | null; der: HTMLElement | null; rellenar: () => void } {
+  return huecosLaterales(ADSENSE_PORTADA_IZQ, ADSENSE_PORTADA_DER, 'anuncio-lado');
+}
+
+export function huecoAnuncioMovil(): { el: HTMLElement | null; rellenar: () => void } {
+  const h = huecosLaterales(ADSENSE_PORTADA_MOVIL, '', 'anuncio-movil');
+  return { el: h.izq, rellenar: h.rellenar };
+}
+
 export async function iniciarAnuncios() {
-  if (__OBJETIVO__ === 'web') {
-    if (!ADSENSE_CLIENTE || !ADSENSE_BLOQUE) return;
-    const hueco = document.getElementById('anuncio')!;
-    hueco.classList.add('activo');
-    bloqueAdsense(hueco, ADSENSE_BLOQUE);
-    return;
-  }
   if (__OBJETIVO__ !== 'android') return;
   try {
     const { AdMob, AdmobConsentStatus, BannerAdPluginEvents, BannerAdPosition, BannerAdSize } = await import('@capacitor-community/admob');

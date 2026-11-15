@@ -112,6 +112,10 @@ export function aTexto(nivel: Nivel): string {
       case 'texto':
         p.push(JSON.stringify(o.texto));
         break;
+      case 'cartel':
+        p.push(`${o.w}x${o.h}`, JSON.stringify(o.texto));
+        if (o.todos) p.push('todos');
+        break;
     }
     if ('invisible' in o && o.invisible) p.push('invisible');
     L.push(p.join(' '));
@@ -182,7 +186,7 @@ export function desdeTexto(texto: string): ResultadoTexto {
     for (const t of tk) {
       let m: RegExpExecArray | null;
       if (t.startsWith('"')) {
-        if (tipo === 'texto') o.texto = t.slice(1);
+        if (tipo === 'texto' || tipo === 'cartel') o.texto = t.slice(1);
         else err('texto inesperado');
       } else if (esNum(t)) nums.push(+t);
       else if (t === '>') continue;
@@ -222,6 +226,7 @@ export function desdeTexto(texto: string): ResultadoTexto {
         else if (tipo === 'terremoto' && w === 'activo') o.inicial = true;
         else if (tipo === 'movil' && w === 'ascensor') o.ascensor = true;
         else if (tipo === 'movil' && w === 'apagada') o.inicial = false;
+        else if (tipo === 'cartel' && w === 'todos') o.todos = true;
         else err(`no entiendo "${t}"`);
       }
     }

@@ -1,7 +1,7 @@
 import {
   clonar, miembrosMoviles, MovilDef, Objeto, trasladar,
   puntoInicio,
-  BotonDef, CajaDef, ControlDef, DelayDef, PinchosDef, TerremotoDef, InterruptorDef, MetaDef, Nivel, ParedDef, PuertaDef, SueloDef, SwitchDef, TemporizadorDef, TextoDef,
+  BotonDef, CajaDef, CartelDef, ControlDef, DelayDef, PinchosDef, TerremotoDef, InterruptorDef, MetaDef, Nivel, ParedDef, PuertaDef, SueloDef, SwitchDef, TemporizadorDef, TextoDef,
 } from './level';
 import { SCRIPTS, Script } from './scripts';
 
@@ -185,6 +185,7 @@ export class Sim {
   interruptores: InterruptorRT[] = [];
   metas: MetaRT[] = [];
   textos: TextoDef[] = [];
+  carteles: CartelDef[] = [];
   suelos: SueloDef[] = [];
   cajas: CajaRT[] = [];
   puertas: PuertaRT[] = [];
@@ -251,6 +252,9 @@ export class Sim {
         case 'texto':
           this.textos.push(o);
           break;
+        case 'cartel':
+          this.carteles.push(o);
+          break;
         case 'suelo':
           this.suelos.push(o);
           break;
@@ -307,7 +311,7 @@ export class Sim {
       (j.x = p.x), (j.y = p.y);
     }
     this.jugador = this.jugadores[local];
-    this.script = (nivel.script && SCRIPTS[nivel.script]) || null;
+    this.script = (__OBJETIVO__ !== 'web' && nivel.script && SCRIPTS[nivel.script]) || null;
   }
 
   private puntoAparicion(): { x: number; y: number } {
@@ -342,6 +346,13 @@ export class Sim {
     return f ? f() : null;
   }
 
+  cartelActual(): CartelDef | null {
+    const j = this.jugador;
+    if (j.muerto) return null;
+    const dentro = (m: Mono, c: CartelDef) => !m.muerto && m.x > c.x && m.x < c.x + c.w && m.y > c.y && m.y < c.y + c.h;
+    return this.carteles.find((c) => dentro(j, c) || (c.todos && this.jugadores.some((m) => dentro(m, c)))) ?? null;
+  }
+
   textosVisibles(): { x: number; y: number; texto: string }[] {
     return this.script?.textos ? [...this.textos, ...this.script.textos(this)] : this.textos;
   }
@@ -363,7 +374,7 @@ export class Sim {
         this.fuegos.push({ x: cx + ox, y: cy + oy, edad: -k * 6, grande: true, semilla: k + 1 }),
       );
     }
-    if (!this.empezado && es.some((x) => x.dx || x.dy)) this.empezar();
+    if (!this.empezado) this.empezar();
     if (this.empezado) {
       this.jugadores.forEach((j, i) => es[i] && this.moverJugador(i, es[i]));
     }
@@ -554,8 +565,9 @@ export class Sim {
       if (c) c.por = i;
     }
     if (!e.dx && !e.dy) return;
-    const mx = e.dx * VELOCIDAD;
-    const my = e.dy * VELOCIDAD;
+    const largo = Math.sqrt(e.dx * e.dx + e.dy * e.dy);
+    const mx = (e.dx / largo) * VELOCIDAD;
+    const my = (e.dy / largo) * VELOCIDAD;
     if (this.choca(j.x + mx, j.y + my, c)) return;
     if (c) {
       if (!this.cabeCaja(c, c.x + mx, c.y + my, j)) return;

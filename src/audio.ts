@@ -4,6 +4,8 @@ import { ajustes } from './store';
 let ctx: AudioContext | null = null;
 let musica: HTMLAudioElement | null = null;
 let desbloqueado = false;
+let fuente: string | null = __OBJETIVO__ === 'web' ? null : 'audio/musica.mp3';
+let permitida = true;
 
 function contexto(): AudioContext | null {
   if (!ctx) {
@@ -68,11 +70,22 @@ export function sonar(e: Evento) {
   if (ajustes.efectos && desbloqueado) SONIDOS[e]();
 }
 
+export function ponerMusica(datos: Blob) {
+  if (fuente) return;
+  fuente = URL.createObjectURL(datos);
+  actualizarMusica();
+}
+
+export function permitirMusica(si: boolean) {
+  permitida = si;
+  actualizarMusica();
+}
+
 export function actualizarMusica() {
-  if (!desbloqueado) return;
-  if (ajustes.musica) {
+  if (!desbloqueado || !fuente) return;
+  if (ajustes.musica && permitida) {
     if (!musica) {
-      musica = new Audio('audio/musica.mp3');
+      musica = new Audio(fuente);
       musica.loop = true;
       musica.volume = 0.35;
     }

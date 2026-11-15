@@ -1,5 +1,7 @@
+import { ponerMusica } from './audio';
 import { URL_COMPARTIR } from './config';
 import { decodificar } from './core/codec';
+import { esColor } from './core/level';
 import type { Entrada } from './core/sim';
 
 const SERVIDOR = 'wss://0.peerjs.com/peerjs?key=peerjs';
@@ -7,7 +9,10 @@ const ICE: RTCConfiguration = { iceServers: [{ urls: 'stun:stun.l.google.com:193
 const PREFIJO = 'rm-';
 const ESPERA_ICE = 2500;
 const ESPERA_CONEXION = 20000;
-const QUIETO = 4;
+const PASOS = 16;
+const LADO = 2 * PASOS + 1;
+const DIRECCIONES = LADO * LADO;
+const QUIETO = PASOS + PASOS * LADO;
 const SIN_CONEXION = 'No se pudo conectar con la sala';
 
 export const MAX_JUGADORES = 8;
@@ -15,8 +20,22 @@ export const LARGO_NOMBRE = 20;
 export const PARAMETRO_SALA = 's';
 export const PARAMETRO_ENVIO = 'e';
 const LARGO_MAX_CODIGO = 200000;
+const TROZO = 16384;
+const MAX_MUSICA = 8000000;
+const ESPERA_MUSICA = 120000;
+const ESPERA_ANFITRION = 180000;
+const ESPERA_REINTENTO = 3000;
+const OCULTO_MAX = 15000;
 
-export interface JugadorSala {
+export const COLOR_PRIMARIO = '#111111';
+export const COLOR_SECUNDARIO = '#ffffff';
+
+export interface Colores {
+  p: string;
+  s: string;
+}
+
+export interface JugadorSala extends Colores {
   id: number;
   nombre: string;
 }
@@ -25,6 +44,7 @@ export interface Sesion {
   jugadores: number;
   local: number;
   semilla: number;
+  colores: Colores[];
   paso(e: Entrada, tick: (es: Entrada[]) => void, quitar: (i: number) => void): void;
 }
 
@@ -44,6 +64,11 @@ export function urlDeEnvio(sala: string): string {
   return `${URL_COMPARTIR.replace(/\/+$/, '')}/?${PARAMETRO_ENVIO}=${sala}`;
 }
 
+export function limpiarColores(c: unknown): Colores {
+  const [p, s] = Array.isArray(c) ? c : [];
+  return { p: esColor(p) ? p.toLowerCase() : COLOR_PRIMARIO, s: esColor(s) ? s.toLowerCase() : COLOR_SECUNDARIO };
+}
+
 export function limpiarNombre(n: unknown): string {
   return String(n ?? '').replace(/\s+/g, ' ').trim().slice(0, LARGO_NOMBRE);
 }
@@ -56,20 +81,29 @@ function azar(n: number): string {
 }
 
 function esCodigo(c: unknown): c is number {
-  return typeof c === 'number' && Number.isInteger(c) && c >= 0 && c < 36;
+  return typeof c === 'number' && Number.isInteger(c) && c >= 0 && c < DIRECCIONES * 4;
 }
 
 function aCodigo(e: Entrada): number {
-  return e.dx + 1 + (e.dy + 1) * 3 + (e.reiniciar ? 9 : 0) + (e.agarrar ? 18 : 0);
+  const m = Math.max(Math.abs(e.dx), Math.abs(e.dy));
+  const qx = m ? Math.round((e.dx / m) * PASOS) : 0;
+  const qy = m ? Math.round((e.dy / m) * PASOS) : 0;
+  return qx + PASOS + (qy + PASOS) * LADO + (e.reiniciar ? DIRECCIONES : 0) + (e.agarrar ? DIRECCIONES * 2 : 0);
 }
 
 function deCodigo(c: unknown): Entrada {
   const n = esCodigo(c) ? c : QUIETO;
-  return { dx: (n % 3) - 1, dy: (Math.floor(n / 3) % 3) - 1, agarrar: n >= 18, reiniciar: Math.floor(n / 9) % 2 === 1 };
+  const dir = n % DIRECCIONES;
+  return {
+    dx: (dir % LADO) - PASOS,
+    dy: Math.floor(dir / LADO) - PASOS,
+    agarrar: n >= DIRECCIONES * 2,
+    reiniciar: Math.floor(n / DIRECCIONES) % 2 === 1,
+  };
 }
 
 function sinReinicio(c: number): number {
-  return (c % 9) + (c >= 18 ? 18 : 0);
+  return (c % DIRECCIONES) + (c >= DIRECCIONES * 2 ? DIRECCIONES * 2 : 0);
 }
 
 function leer(datos: unknown): any {
@@ -102,6 +136,102 @@ function reunir(pc: RTCPeerConnection): Promise<void> {
     };
     const t = setTimeout(fin, ESPERA_ICE);
     pc.addEventListener('icegatheringstatechange', mirar);
+  });
+}
+
+let musicaLocal: Promise<ArrayBuffer | null> | null = null;
+
+function leerMusica(): Promise<ArrayBuffer | null> {
+  return (musicaLocal ??= new Promise((ok) => {
+    const x = new XMLHttpRequest();
+    x.open('GET', 'audio/musica.mp3');
+    x.responseType = 'arraybuffer';
+    x.onload = () => ok((x.status === 200 || x.status === 0) && x.response instanceof ArrayBuffer && x.response.byteLength ? x.response : null);
+    x.onerror = () => ok(null);
+    x.send();
+  }));
+}
+
+function esperar(canal: RTCDataChannel, ev: 'open' | 'bufferedamountlow'): Promise<boolean> {
+  return new Promise((ok) => {
+    const fin = (v: boolean) => {
+      canal.removeEventListener(ev, si);
+      canal.removeEventListener('close', no);
+      ok(v);
+    };
+    const si = () => fin(true);
+    const no = () => fin(false);
+    canal.addEventListener(ev, si);
+    canal.addEventListener('close', no);
+  });
+}
+
+async function enviarMusica(pc: RTCPeerConnection): Promise<void> {
+  if (__OBJETIVO__ === 'web') return;
+  const datos = await leerMusica();
+  if (!datos || pc.connectionState === 'closed') return;
+  let canal: RTCDataChannel;
+  try {
+    canal = pc.createDataChannel('musica');
+  } catch {
+    return;
+  }
+  canal.binaryType = 'arraybuffer';
+  canal.bufferedAmountLowThreshold = TROZO * 16;
+  const limite = setTimeout(() => canal.close(), ESPERA_MUSICA);
+  const recibida = new Promise<void>((ok) => {
+    canal.addEventListener('message', () => ok());
+    canal.addEventListener('close', () => ok());
+  });
+  try {
+    if (canal.readyState !== 'open' && !(await esperar(canal, 'open'))) return;
+    canal.send(JSON.stringify({ mu: datos.byteLength }));
+    for (let i = 0; i < datos.byteLength; i += TROZO) {
+      if (canal.bufferedAmount > TROZO * 64 && !(await esperar(canal, 'bufferedamountlow'))) return;
+      canal.send(datos.slice(i, i + TROZO));
+    }
+    await recibida;
+  } catch {
+    return;
+  } finally {
+    clearTimeout(limite);
+    canal.close();
+  }
+}
+
+function recibirMusica(pc: RTCPeerConnection): Promise<void> {
+  return new Promise((fin) => {
+    if (__OBJETIVO__ !== 'web') return fin();
+    const limite = setTimeout(fin, ESPERA_MUSICA);
+    const acabar = () => {
+      clearTimeout(limite);
+      fin();
+    };
+    pc.addEventListener('datachannel', (ev) => {
+      const c = ev.channel;
+      if (c.label !== 'musica') return;
+      c.binaryType = 'arraybuffer';
+      let total = -1;
+      let n = 0;
+      const partes: ArrayBuffer[] = [];
+      c.onclose = acabar;
+      c.onmessage = (e) => {
+        if (typeof e.data === 'string') {
+          const t = leer(e.data)?.mu;
+          if (Number.isInteger(t) && t > 0 && t <= MAX_MUSICA) total = t;
+          else c.close();
+          return;
+        }
+        if (total < 0 || !(e.data instanceof ArrayBuffer)) return void c.close();
+        partes.push(e.data);
+        n += e.data.byteLength;
+        if (n > total) return void c.close();
+        if (n < total) return;
+        mandar(c, '{"ok":1}');
+        ponerMusica(new Blob(partes, { type: 'audio/mpeg' }));
+        acabar();
+      };
+    });
   });
 }
 
@@ -158,6 +288,8 @@ interface Remoto {
   mov: number;
   rei: boolean;
   ido: boolean;
+  musica: boolean;
+  colores: Colores;
 }
 
 export class Anfitrion {
@@ -168,6 +300,7 @@ export class Anfitrion {
   alCambiar: () => void = () => undefined;
 
   private nombre: string;
+  private colores: Colores;
   private codigo: string;
   private senal: Senal | null = null;
   private abriendo: Promise<string> | null = null;
@@ -178,16 +311,47 @@ export class Anfitrion {
   private cerrado = false;
   private orden: Remoto[] = [];
   private bajas: number[] = [];
+  private idSala: string | null = null;
+  private reapertura = 0;
+  private ocultoDesde = 0;
   private alOcultar = () => this.cerrar();
+  private alVisibilidad = () => {
+    if (document.hidden) {
+      this.ocultoDesde = Date.now();
+      return;
+    }
+    if (this.cerrado || this.empezada || !this.idSala) return;
+    if (this.senal && Date.now() - this.ocultoDesde > OCULTO_MAX) {
+      const s = this.senal;
+      this.senal = null;
+      this.sala = null;
+      s.cerrar();
+    }
+    if (!this.senal) this.reabrir(0);
+  };
 
-  constructor(nombre: string, codigo = '') {
+  constructor(nombre: string, codigo = '', colores: Colores = { p: COLOR_PRIMARIO, s: COLOR_SECUNDARIO }) {
     this.nombre = limpiarNombre(nombre);
+    this.colores = limpiarColores([colores.p, colores.s]);
     this.codigo = codigo;
     window.addEventListener('pagehide', this.alOcultar);
+    document.addEventListener('visibilitychange', this.alVisibilidad);
+  }
+
+  get codigoSala(): string | null {
+    return this.idSala;
+  }
+
+  private reabrir(espera: number) {
+    clearTimeout(this.reapertura);
+    if (this.cerrado || this.empezada || !this.idSala || document.hidden) return;
+    this.reapertura = window.setTimeout(() => {
+      this.abrir().catch(() => this.reabrir(Math.min(Math.max(espera * 2, 2000), 15000)));
+    }, espera);
   }
 
   get lista(): JugadorSala[] {
-    return [{ id: 0, nombre: this.nombre }, ...this.remotos.map((r) => ({ id: r.id, nombre: r.nombre }))];
+    return [{ id: 0, nombre: this.nombre, ...this.colores }, ...this.remotos.map((r) => ({ id: r.id, nombre: r.nombre, ...r.colores }))];
   }
 
   nombrar(n: string) {
@@ -195,11 +359,16 @@ export class Anfitrion {
     this.anunciar();
   }
 
+  colorear(c: Colores) {
+    this.colores = limpiarColores([c.p, c.s]);
+    if (!this.empezada) this.anunciar();
+  }
+
   abrir(): Promise<string> {
     if (this.sala) return Promise.resolve(this.sala);
     if (this.abriendo) return this.abriendo;
+    const sala = (this.idSala ??= azar(10));
     const p = new Promise<string>((ok, mal) => {
-      const sala = azar(10);
       const s = new Senal(PREFIJO + sala);
       let abierta = false;
       s.alAbrir = () => {
@@ -208,6 +377,7 @@ export class Anfitrion {
         this.senal = s;
         this.sala = sala;
         ok(sala);
+        this.alCambiar();
       };
       s.alMensaje = (m) => {
         if (m.type === 'OFFER') void this.aceptar(s, m);
@@ -217,6 +387,7 @@ export class Anfitrion {
           this.senal = null;
           this.sala = null;
           this.alCambiar();
+          this.reabrir(1000);
         }
         if (!abierta) mal(new Error('No se pudo abrir la sala'));
       };
@@ -262,7 +433,7 @@ export class Anfitrion {
       setTimeout(() => pc.close(), 1000);
       return;
     }
-    const r: Remoto = { id: this.siguiente++, nombre: '', pc, canal, mov: QUIETO, rei: false, ido: false };
+    const r: Remoto = { id: this.siguiente++, nombre: '', pc, canal, mov: QUIETO, rei: false, ido: false, musica: false, colores: limpiarColores(null) };
     this.remotos.push(r);
     canal.onmessage = (ev) => this.mensaje(r, ev.data);
     canal.onclose = () => this.baja(r);
@@ -278,9 +449,16 @@ export class Anfitrion {
     if (typeof m?.n === 'string') {
       r.nombre = limpiarNombre(m.n);
       if (!this.empezada) this.anunciar();
+    } else if (Array.isArray(m?.c)) {
+      if (this.empezada) return;
+      r.colores = limpiarColores(m.c);
+      this.anunciar();
     } else if (esCodigo(m?.e)) {
       r.mov = sinReinicio(m.e);
       if (m.e !== r.mov) r.rei = true;
+    } else if (m?.pm === 1 && !r.musica) {
+      r.musica = true;
+      void enviarMusica(r.pc);
     }
   }
 
@@ -310,6 +488,7 @@ export class Anfitrion {
 
   empezar(): Sesion {
     this.empezada = true;
+    clearTimeout(this.reapertura);
     this.senal?.cerrar();
     this.senal = null;
     this.sala = null;
@@ -317,11 +496,14 @@ export class Anfitrion {
     this.pendientes.clear();
     const orden = (this.orden = this.remotos.slice());
     const semilla = crypto.getRandomValues(new Uint32Array(1))[0];
-    orden.forEach((r, i) => mandar(r.canal, JSON.stringify({ ini: orden.length + 1, tu: i + 1, se: semilla })));
+    const colores = [this.colores, ...orden.map((r) => r.colores)];
+    const co = colores.map((c) => [c.p, c.s]);
+    orden.forEach((r, i) => mandar(r.canal, JSON.stringify({ ini: orden.length + 1, tu: i + 1, se: semilla, co })));
     return {
       jugadores: orden.length + 1,
       local: 0,
       semilla,
+      colores,
       paso: (e, tick, quitar) => {
         for (const i of this.bajas.splice(0)) {
           this.difundir({ f: i });
@@ -338,6 +520,8 @@ export class Anfitrion {
   cerrar() {
     this.cerrado = true;
     window.removeEventListener('pagehide', this.alOcultar);
+    document.removeEventListener('visibilitychange', this.alVisibilidad);
+    clearTimeout(this.reapertura);
     this.alCambiar = () => undefined;
     this.senal?.cerrar();
     this.senal = null;
@@ -358,63 +542,113 @@ export class Invitado {
   alCaer: (motivo: string) => void = () => undefined;
   alNivel: (codigo: string) => void = () => undefined;
 
+  esperando = false;
+
   private nombre: string;
-  private senal: Senal | null;
-  private pc: RTCPeerConnection;
-  private canal: RTCDataChannel;
+  private colores: Colores;
+  private sala: string;
+  private senal: Senal | null = null;
+  private pc!: RTCPeerConnection;
+  private canal!: RTCDataChannel;
   private cola: (unknown[] | number)[] = [];
   private ultimo = QUIETO;
   private cerrado = false;
-  private espera: number;
+  private espera = 0;
+  private reintento = 0;
+  private limite: number;
   private alOcultar = () => this.cerrar();
 
-  constructor(sala: string, nombre: string) {
+  constructor(sala: string, nombre: string, colores: Colores = { p: COLOR_PRIMARIO, s: COLOR_SECUNDARIO }) {
     this.nombre = limpiarNombre(nombre);
+    this.colores = limpiarColores([colores.p, colores.s]);
+    this.sala = sala;
+    this.limite = Date.now() + ESPERA_ANFITRION;
     window.addEventListener('pagehide', this.alOcultar);
+    this.intentar();
+  }
+
+  private intentar() {
     const conexion = 'dc_' + azar(12);
     const pc = (this.pc = new RTCPeerConnection(ICE));
     const canal = (this.canal = pc.createDataChannel(conexion));
+    const vigente = () => !this.cerrado && this.pc === pc;
+    const fallo = (motivo: string) => {
+      if (!vigente()) return;
+      if (this.conectado) this.caer('Se ha perdido la conexión con el anfitrión');
+      else this.reintentar(motivo);
+    };
     canal.onopen = () => {
+      if (!vigente()) return;
       clearTimeout(this.espera);
       this.senal?.cerrar();
       this.senal = null;
       this.conectado = true;
+      this.esperando = false;
       mandar(canal, JSON.stringify({ n: this.nombre }));
+      mandar(canal, JSON.stringify({ c: [this.colores.p, this.colores.s] }));
+      if (__OBJETIVO__ === 'web') mandar(canal, '{"pm":1}');
       this.alCambiar();
     };
-    canal.onmessage = (ev) => this.mensaje(ev.data);
-    const perdida = () => this.caer(this.conectado ? 'Se ha perdido la conexión con el anfitrión' : SIN_CONEXION);
-    canal.onclose = perdida;
+    void recibirMusica(pc);
+    canal.onmessage = (ev) => vigente() && this.mensaje(ev.data);
+    canal.onclose = () => fallo(SIN_CONEXION);
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed') perdida();
+      if (pc.connectionState === 'failed') fallo(SIN_CONEXION);
     };
 
     const oferta = (async () => {
       await pc.setLocalDescription(await pc.createOffer());
       await reunir(pc);
     })();
-    oferta.catch(() => this.caer(SIN_CONEXION));
+    oferta.catch(() => fallo(SIN_CONEXION));
 
     const s = (this.senal = new Senal(PREFIJO + azar(16)));
     s.alAbrir = () => {
       void oferta.then(() => {
-        if (!this.cerrado && pc.localDescription) s.enviar('OFFER', PREFIJO + sala, conexion, pc.localDescription);
+        if (vigente() && pc.localDescription) s.enviar('OFFER', PREFIJO + this.sala, conexion, pc.localDescription);
       });
     };
     s.alMensaje = (m) => {
       const sdp = m.payload?.sdp?.sdp;
-      if (m.type === 'ANSWER' && typeof sdp === 'string') pc.setRemoteDescription({ type: 'answer', sdp }).catch(() => this.caer(SIN_CONEXION));
-      else if (m.type === 'EXPIRE') this.caer('La sala no existe o ya se ha cerrado');
+      if (m.type === 'ANSWER' && typeof sdp === 'string') pc.setRemoteDescription({ type: 'answer', sdp }).catch(() => fallo(SIN_CONEXION));
+      else if (m.type === 'EXPIRE') fallo('La sala no existe o ya se ha cerrado');
     };
     s.alCerrar = () => {
-      if (!this.conectado) this.caer(SIN_CONEXION);
+      if (this.senal === s && !this.conectado) fallo(SIN_CONEXION);
     };
-    this.espera = window.setTimeout(() => this.caer(SIN_CONEXION), ESPERA_CONEXION);
+    clearTimeout(this.espera);
+    this.espera = window.setTimeout(() => fallo(SIN_CONEXION), ESPERA_CONEXION);
+  }
+
+  private soltarIntento() {
+    clearTimeout(this.espera);
+    this.senal?.cerrar();
+    this.senal = null;
+    this.canal.onclose = null;
+    this.canal.onmessage = null;
+    this.pc.onconnectionstatechange = null;
+    this.pc.close();
+  }
+
+  private reintentar(motivo: string) {
+    this.soltarIntento();
+    if (Date.now() + ESPERA_REINTENTO > this.limite) return this.caer(motivo);
+    if (!this.esperando) {
+      this.esperando = true;
+      this.alCambiar();
+    }
+    clearTimeout(this.reintento);
+    this.reintento = window.setTimeout(() => !this.cerrado && this.intentar(), ESPERA_REINTENTO);
   }
 
   nombrar(n: string) {
     this.nombre = limpiarNombre(n);
     mandar(this.canal, JSON.stringify({ n: this.nombre }));
+  }
+
+  colorear(c: Colores) {
+    this.colores = limpiarColores([c.p, c.s]);
+    mandar(this.canal, JSON.stringify({ c: [this.colores.p, this.colores.s] }));
   }
 
   private mensaje(datos: unknown) {
@@ -430,22 +664,24 @@ export class Invitado {
       this.alNivel(m.nv);
     } else if (Number.isInteger(m?.f)) this.cola.push(m.f as number);
     else if (Array.isArray(m?.j)) {
-      this.lista = (m.j as any[]).slice(0, MAX_JUGADORES).map((x) => ({ id: Number(x?.id), nombre: limpiarNombre(x?.nombre) }));
+      this.lista = (m.j as any[]).slice(0, MAX_JUGADORES).map((x) => ({ id: Number(x?.id), nombre: limpiarNombre(x?.nombre), ...limpiarColores([x?.p, x?.s]) }));
       this.yo = Number(m.tu);
       this.alCambiar();
     } else if (Number.isInteger(m?.ini)) {
       const n = m.ini as number;
       const tu = Number(m.tu);
       if (n < 1 || n > MAX_JUGADORES || !Number.isInteger(tu) || tu < 0 || tu >= n) return this.caer(SIN_CONEXION);
-      this.alEmpezar(this.sesion(n, tu, Number.isInteger(m.se) ? m.se : 0));
+      const co: unknown[] = Array.isArray(m.co) ? m.co : [];
+      this.alEmpezar(this.sesion(n, tu, Number.isInteger(m.se) ? m.se : 0, Array.from({ length: n }, (_, i) => limpiarColores(co[i]))));
     } else if (typeof m?.x === 'string') this.caer(m.x.slice(0, 80));
   }
 
-  private sesion(jugadores: number, local: number, semilla: number): Sesion {
+  private sesion(jugadores: number, local: number, semilla: number, colores: Colores[]): Sesion {
     return {
       jugadores,
       local,
       semilla,
+      colores,
       paso: (e, tick, quitar) => {
         const c = aCodigo(e);
         if (sinReinicio(c) !== this.ultimo || c !== sinReinicio(c)) {
@@ -474,13 +710,8 @@ export class Invitado {
   cerrar() {
     this.cerrado = true;
     window.removeEventListener('pagehide', this.alOcultar);
-    clearTimeout(this.espera);
-    this.senal?.cerrar();
-    this.senal = null;
-    this.canal.onclose = null;
-    this.canal.onmessage = null;
-    this.pc.onconnectionstatechange = null;
-    this.pc.close();
+    clearTimeout(this.reintento);
+    this.soltarIntento();
   }
 }
 
@@ -495,16 +726,49 @@ export class Emisor {
   private senal: Senal | null = null;
   private conexiones = new Set<RTCPeerConnection>();
   private cerrado = false;
+  private idSala: string | null = null;
+  private abriendo: Promise<string> | null = null;
+  private reapertura = 0;
+  private ocultoDesde = 0;
   private alOcultar = () => this.cerrar();
+  private alVisibilidad = () => {
+    if (document.hidden) {
+      this.ocultoDesde = Date.now();
+      return;
+    }
+    if (this.cerrado || !this.idSala) return;
+    if (this.senal && Date.now() - this.ocultoDesde > OCULTO_MAX) {
+      const s = this.senal;
+      this.senal = null;
+      this.sala = null;
+      s.cerrar();
+    }
+    if (!this.senal) this.reabrir(0);
+  };
 
   constructor(codigo: string) {
     this.codigo = codigo;
     window.addEventListener('pagehide', this.alOcultar);
+    document.addEventListener('visibilitychange', this.alVisibilidad);
+  }
+
+  get codigoSala(): string | null {
+    return this.idSala;
+  }
+
+  private reabrir(espera: number) {
+    clearTimeout(this.reapertura);
+    if (this.cerrado || !this.idSala || document.hidden) return;
+    this.reapertura = window.setTimeout(() => {
+      this.abrir().catch(() => this.reabrir(Math.min(Math.max(espera * 2, 2000), 15000)));
+    }, espera);
   }
 
   abrir(): Promise<string> {
-    return new Promise<string>((ok, mal) => {
-      const sala = azar(10);
+    if (this.sala) return Promise.resolve(this.sala);
+    if (this.abriendo) return this.abriendo;
+    const sala = (this.idSala ??= azar(10));
+    const p = new Promise<string>((ok, mal) => {
       const s = new Senal(PREFIJO + sala);
       let abierta = false;
       s.alAbrir = () => {
@@ -523,10 +787,17 @@ export class Emisor {
           this.senal = null;
           this.sala = null;
           this.alCambiar();
+          this.reabrir(1000);
         }
         if (!abierta) mal(new Error('No se pudo abrir la sala'));
       };
     });
+    const fin = () => {
+      this.abriendo = null;
+    };
+    this.abriendo = p;
+    p.then(fin, fin);
+    return p;
   }
 
   private async aceptar(s: Senal, m: Mensaje) {
@@ -543,11 +814,18 @@ export class Emisor {
     const t = setTimeout(fin, ESPERA_CONEXION * 2);
     pc.ondatachannel = (ev) => {
       const canal = ev.channel;
+      let musica: Promise<void> | null = null;
       canal.onmessage = (e) => {
-        if (leer(e.data)?.ok !== 1) return;
-        fin();
+        const m = leer(e.data);
+        if (m?.pm === 1) {
+          musica ??= enviarMusica(pc);
+          return;
+        }
+        if (m?.ok !== 1) return;
+        clearTimeout(t);
         this.recibidos++;
         this.alCambiar();
+        void (musica ?? Promise.resolve()).then(fin);
       };
       const enviar = () => mandar(canal, JSON.stringify({ nv: this.codigo }));
       if (canal.readyState === 'open') enviar();
@@ -569,6 +847,8 @@ export class Emisor {
   cerrar() {
     this.cerrado = true;
     window.removeEventListener('pagehide', this.alOcultar);
+    document.removeEventListener('visibilitychange', this.alVisibilidad);
+    clearTimeout(this.reapertura);
     this.alCambiar = () => undefined;
     this.senal?.cerrar();
     this.senal = null;
@@ -580,77 +860,118 @@ export class Emisor {
 
 export class Receptor {
   readonly nivel: Promise<string>;
+  esperando = false;
+  alCambiar: () => void = () => undefined;
 
-  private senal: Senal | null;
-  private pc: RTCPeerConnection;
-  private canal: RTCDataChannel;
-  private espera: number;
+  private sala: string;
+  private senal: Senal | null = null;
+  private pc!: RTCPeerConnection;
+  private canal!: RTCDataChannel;
+  private espera = 0;
+  private reintento = 0;
+  private limite: number;
   private hecho = false;
+  private ok: (codigo: string) => void = () => undefined;
+  private mal: (e: Error) => void = () => undefined;
   private alOcultar = () => this.cerrar();
 
   constructor(sala: string) {
-    let ok: (codigo: string) => void = () => undefined;
-    let mal: (e: Error) => void = () => undefined;
     this.nivel = new Promise<string>((a, b) => {
-      ok = a;
-      mal = b;
+      this.ok = a;
+      this.mal = b;
     });
-    const caer = (motivo: string) => {
-      if (this.hecho) return;
-      this.hecho = true;
-      this.cerrar();
-      mal(new Error(motivo));
-    };
+    this.sala = sala;
+    this.limite = Date.now() + ESPERA_ANFITRION;
     window.addEventListener('pagehide', this.alOcultar);
+    this.intentar();
+  }
+
+  private caer(motivo: string) {
+    if (this.hecho) return;
+    this.hecho = true;
+    this.cerrar();
+    this.mal(new Error(motivo));
+  }
+
+  private intentar() {
     const conexion = 'dc_' + azar(12);
     const pc = (this.pc = new RTCPeerConnection(ICE));
     const canal = (this.canal = pc.createDataChannel(conexion));
+    const vigente = () => !this.hecho && this.pc === pc;
+    const fallo = (motivo: string) => {
+      if (vigente()) this.reintentar(motivo);
+    };
+    const musica = recibirMusica(pc);
     canal.onopen = () => {
+      if (!vigente()) return;
       this.senal?.cerrar();
       this.senal = null;
+      if (__OBJETIVO__ === 'web') mandar(canal, '{"pm":1}');
     };
     canal.onmessage = (ev) => {
+      if (!vigente()) return;
       const c = leer(ev.data)?.nv;
-      if (typeof c !== 'string' || c.length > LARGO_MAX_CODIGO) return caer('El nivel recibido no es válido');
+      if (typeof c !== 'string' || c.length > LARGO_MAX_CODIGO) return this.caer('El nivel recibido no es válido');
       try {
         decodificar(c);
       } catch (e) {
-        return caer((e as Error).message);
+        return this.caer((e as Error).message);
       }
-      if (this.hecho) return;
       this.hecho = true;
+      this.esperando = false;
       clearTimeout(this.espera);
       mandar(canal, JSON.stringify({ ok: 1 }));
-      ok(c);
-      setTimeout(() => this.cerrar(), 2000);
+      this.ok(c);
+      void musica.then(() => this.cerrar());
     };
-    canal.onclose = () => caer(SIN_CONEXION);
+    canal.onclose = () => fallo(SIN_CONEXION);
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed') caer(SIN_CONEXION);
+      if (pc.connectionState === 'failed') fallo(SIN_CONEXION);
     };
 
     const oferta = (async () => {
       await pc.setLocalDescription(await pc.createOffer());
       await reunir(pc);
     })();
-    oferta.catch(() => caer(SIN_CONEXION));
+    oferta.catch(() => fallo(SIN_CONEXION));
 
     const s = (this.senal = new Senal(PREFIJO + azar(16)));
     s.alAbrir = () => {
       void oferta.then(() => {
-        if (!this.hecho && pc.localDescription) s.enviar('OFFER', PREFIJO + sala, conexion, pc.localDescription);
+        if (vigente() && pc.localDescription) s.enviar('OFFER', PREFIJO + this.sala, conexion, pc.localDescription);
       });
     };
     s.alMensaje = (m) => {
       const sdp = m.payload?.sdp?.sdp;
-      if (m.type === 'ANSWER' && typeof sdp === 'string') pc.setRemoteDescription({ type: 'answer', sdp }).catch(() => caer(SIN_CONEXION));
-      else if (m.type === 'EXPIRE') caer('El enlace ya no está disponible: quien lo compartió no está conectado');
+      if (m.type === 'ANSWER' && typeof sdp === 'string') pc.setRemoteDescription({ type: 'answer', sdp }).catch(() => fallo(SIN_CONEXION));
+      else if (m.type === 'EXPIRE') fallo('El enlace ya no está disponible: quien lo compartió no está conectado');
     };
     s.alCerrar = () => {
-      if (!this.senal) return;
-      caer(SIN_CONEXION);
+      if (this.senal === s) fallo(SIN_CONEXION);
     };
-    this.espera = window.setTimeout(() => caer(SIN_CONEXION), ESPERA_CONEXION);
+    clearTimeout(this.espera);
+    this.espera = window.setTimeout(() => fallo(SIN_CONEXION), ESPERA_CONEXION);
+  }
+
+  private reintentar(motivo: string) {
+    this.soltarIntento();
+    if (Date.now() + ESPERA_REINTENTO > this.limite) return this.caer(motivo);
+    if (!this.esperando) {
+      this.esperando = true;
+      this.alCambiar();
+    }
+    clearTimeout(this.reintento);
+    this.reintento = window.setTimeout(() => !this.hecho && this.intentar(), ESPERA_REINTENTO);
+  }
+
+  private soltarIntento() {
+    clearTimeout(this.espera);
+    this.senal?.cerrar();
+    this.senal = null;
+    this.canal.onclose = null;
+    this.canal.onmessage = null;
+    this.pc.onconnectionstatechange = null;
+    this.pc.close();
   }
 
   cancelar() {
@@ -660,12 +981,7 @@ export class Receptor {
 
   private cerrar() {
     window.removeEventListener('pagehide', this.alOcultar);
-    clearTimeout(this.espera);
-    this.senal?.cerrar();
-    this.senal = null;
-    this.canal.onclose = null;
-    this.canal.onmessage = null;
-    this.pc.onconnectionstatechange = null;
-    this.pc.close();
+    clearTimeout(this.reintento);
+    this.soltarIntento();
   }
 }

@@ -28,7 +28,7 @@ type Arrastre =
   | { tipo: 'crear'; id: number; ox: number; oy: number }
   | { tipo: 'grupo'; x: number; y: number; orig: Map<number, number[]> };
 
-const ORDEN_TOQUE: Tipo[] = ['movil', 'texto', 'puerta', 'switch', 'temporizador', 'delay', 'terremoto', 'caja', 'interruptor', 'botontodos', 'boton', 'paredmala', 'pared', 'pinchos', 'meta', 'control', 'suelo'];
+const ORDEN_TOQUE: Tipo[] = ['movil', 'texto', 'puerta', 'switch', 'temporizador', 'delay', 'terremoto', 'caja', 'interruptor', 'botontodos', 'boton', 'paredmala', 'pared', 'pinchos', 'meta', 'control', 'cartel', 'suelo'];
 const FLECHAS = ['↑', '→', '↓', '←'];
 const REJILLA = 25;
 const NOMBRE_RANURA: Record<Ranura, string> = { por: 'Entrada', a: 'Entrada A', b: 'Entrada B' };
@@ -44,7 +44,7 @@ const NOTA_OPERACION = {
 function limitesRect(t: Tipo): [number, number] {
   if (t === 'meta') return [LIMITES.metaMin, LIMITES.metaMax];
   if (t === 'caja') return [LIMITES.cajaMin, LIMITES.cajaMax];
-  if (t === 'suelo' || t === 'control' || t === 'pinchos' || t === 'movil') return [LIMITES.sueloMin, 2000];
+  if (t === 'suelo' || t === 'control' || t === 'cartel' || t === 'pinchos' || t === 'movil') return [LIMITES.sueloMin, 2000];
   return [LIMITES.paredMin, 2000];
 }
 
@@ -77,20 +77,21 @@ temporizador r1 900 300 activo=1 inactivo=2.5
 delay d1 1000 300 tiempo=1.5 por=b1
 terremoto 1100 300 intensidad=10 frecuencia=15 radio=300 activo por=b1
 meta 1000 100 100x100
-texto 200 500 "Un mensaje"`;
+texto 200 500 "Un mensaje"
+cartel 300 500 150x100 "Mensaje del cartel" todos invisible`;
 
 function limitar(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
 }
 
-function iconoHerramienta(t: Tipo | null): HTMLElement {
+export function iconoHerramienta(t: Tipo | null): HTMLElement {
   if (!t) return icono('seleccionar') as unknown as HTMLElement;
   const c = h('canvas', { width: 56, height: 56, class: 'ico-herr' });
   const ctx = c.getContext('2d')!;
   const n: Nivel = { nombre: '', autor: '', fondo: C.fondo, inicio: { x: -500, y: -500, w: 100, h: 100 }, objetos: [] };
   const o = crear(t, 1, 0, 0) as any;
   if (t === 'pared' || t === 'paredmala') Object.assign(o, { x: 4, y: 18, w: 48, h: 20 });
-  else if (t === 'control') Object.assign(o, { x: 6, y: 6, w: 44, h: 44 });
+  else if (t === 'control' || t === 'cartel') Object.assign(o, { x: 6, y: 6, w: 44, h: 44 });
   else if (t === 'pinchos') Object.assign(o, { x: 4, y: 14, w: 48, h: 28 });
   else if (t === 'movil') Object.assign(o, { x: 6, y: 6, w: 44, h: 44, ruta: [] });
   else if (t === 'boton' || t === 'botontodos' || t === 'interruptor') Object.assign(o, { x: 28, y: 30, r: 22 });
@@ -474,6 +475,23 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
           h('p', { class: 'nota' }, 'Cuenta como suelo. Encendidos matan a quien los pise. Si están conectados, cambian de estado mientras su entrada esté activa.'),
         );
         break;
+      case 'cartel': {
+        const entrada = h('input', { type: 'text', value: o.texto, maxLength: L.cartel });
+        entrada.addEventListener('input', () => {
+          o.texto = entrada.value;
+          cambio(true);
+        });
+        filas.push(
+          campoNumero('Ancho', o.w, L.sueloMin, 2000, rejilla, (v) => (o.w = v)),
+          campoNumero('Alto', o.h, L.sueloMin, 2000, rejilla, (v) => (o.h = v)),
+          h('label', { class: 'campo' }, 'Mensaje', entrada),
+          campoOpciones('Lo ve', ['Solo quien entra', 'Todos'], o.todos ? 1 : 0, (i) => (o.todos = i === 1), true),
+          h('p', { class: 'nota' }, o.todos
+            ? 'Cuando cualquier jugador entra en su área, todos ven un bocadillo con este mensaje.'
+            : 'Cuando un jugador entra en su área, solo él ve un bocadillo con este mensaje.'),
+        );
+        break;
+      }
       case 'control':
         filas.push(
           campoNumero('Ancho', o.w, L.sueloMin, 2000, rejilla, (v) => (o.w = v)),
@@ -623,6 +641,7 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
       case 'suelo':
       case 'caja':
       case 'control':
+      case 'cartel':
       case 'pinchos':
       case 'movil':
         return { x: o.x, y: o.y, w: o.w, h: o.h };

@@ -8,7 +8,7 @@ import { PUEDE_COMPARTIR, compartir, copiar, huecosAnuncioFin } from '../platfor
 import { Emisor, urlDeEnvio } from '../red';
 import type { Sesion } from '../red';
 import { Vista } from '../render';
-import { ajustes, alternarFavorito, esFavorito, guardarAjustes } from '../store';
+import { ajustes, guardarAjustes } from '../store';
 import { aviso, botonIcono, h, icono, modal } from './dom';
 
 export interface OpcionesJuego {
@@ -22,6 +22,13 @@ export interface OpcionesJuego {
 }
 
 const SUAVIZADO = 220;
+
+let pantallaPedida = false;
+const PUEDE_PANTALLA = ES_WEB && typeof document.documentElement.requestFullscreen === 'function';
+
+function pedirPantallaCompleta(): Promise<unknown> {
+  return document.documentElement.requestFullscreen().then(() => (screen.orientation as any)?.lock?.('landscape'));
+}
 
 function extension(n: Nivel) {
   let x0 = n.inicio.x;
@@ -56,21 +63,43 @@ export function compartirNivel(codigo: string, nombre: string, detalle = '') {
   const campo = h('input', { type: 'text', readOnly: true, onfocus: () => campo.select() });
   const nota = h('p', { class: 'nota' });
   const estado = h('p', { class: 'nota' });
+  const qr = h('div', { class: 'compartir-qr', hidden: true });
+  let urlQR = '';
   const bCopiar = h('button', { class: 'btn', onclick: () => void copiar(url).then((ok) => aviso(ok ? 'Enlace copiado' : 'No se pudo copiar')) }, 'Copiar enlace');
+  const bCodigo = h('button', { class: 'btn', onclick: () => void copiar(codigo).then((ok) => aviso(ok ? 'Código del nivel copiado' : 'No se pudo copiar')) }, 'Copiar código del nivel');
   const bCompartir = PUEDE_COMPARTIR ? h('button', { class: 'btn primario', onclick: () => void compartir(url, titulo) }, icono('compartir'), 'Compartir') : null;
 
   const pintar = () => {
     const corto = !incluir.checked;
-    url = !corto ? urlDeCodigo(codigo) : emisor?.sala ? urlDeEnvio(emisor.sala) : '';
+    const sala = emisor?.codigoSala;
+    url = !corto ? urlDeCodigo(codigo) : sala ? urlDeEnvio(sala) : '';
     campo.value = url;
     bCopiar.disabled = !url;
+    bCodigo.hidden = corto;
     if (bCompartir) bCompartir.disabled = !url;
     nota.textContent = corto
-      ? `${detalle}El enlace solo lleva la sala: el nivel se envía directamente a quien lo abra. Deja esta ventana abierta hasta que lo reciba.`
+      ? `${detalle}El enlace solo lleva la sala: el nivel se envía directamente a quien lo abra. Deja esta ventana abierta; si sales de la app para mandarlo, vuelve a ella y quien lo abra lo recibirá.`
       : `${detalle}Todo el nivel viaja dentro del enlace (${url.length} caracteres). Funciona aunque no estés conectado.`;
     const n = emisor?.recibidos ?? 0;
     estado.hidden = !corto;
-    estado.textContent = !emisor ? fallo : !emisor.sala ? 'Abriendo sala…' : n ? `Recibido por ${n} ${n === 1 ? 'jugador' : 'jugadores'}.` : 'Esperando a que alguien abra el enlace…';
+    estado.textContent = !emisor
+      ? fallo
+      : !sala
+        ? 'Abriendo sala…'
+        : !emisor.sala
+          ? 'Reconectando la sala…'
+          : n
+            ? `Recibido por ${n} ${n === 1 ? 'jugador' : 'jugadores'}.`
+            : 'Esperando a que alguien abra el enlace…';
+    qr.hidden = !(corto && url && urlQR === url);
+    if (__OBJETIVO__ !== 'web' && corto && url && urlQR !== url) {
+      const destino = (urlQR = url);
+      void import('../qr').then(({ svgQR }) => {
+        if (urlQR !== destino) return;
+        qr.innerHTML = svgQR(destino);
+        qr.hidden = incluir.checked;
+      });
+    }
   };
 
   const cambiar = () => {
@@ -96,8 +125,9 @@ export function compartirNivel(codigo: string, nombre: string, detalle = '') {
     h('label', { class: 'casilla' }, incluir, 'Incluir el nivel en el enlace'),
     nota,
     campo,
+    qr,
     estado,
-    h('div', { class: 'fila fin' }, bCopiar, bCompartir),
+    h('div', { class: 'fila fin' }, bCodigo, bCopiar, bCompartir),
   );
   const vigia = new MutationObserver(() => {
     if (m.caja.isConnected) return;
@@ -114,7 +144,6 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
   const canvas = h('canvas', { class: 'lienzo' });
   const pista = h('div', { class: 'pista' });
   const fin = h('div', { class: 'fin-nivel sin-palanca', hidden: true });
-  let conexiones = false;
 
   const alternar = (b: HTMLButtonElement, clave: 'musica' | 'efectos') => {
     ajustes[clave] = !ajustes[clave];
@@ -122,42 +151,36 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
     b.classList.toggle('apagado', !ajustes[clave]);
     actualizarMusica();
   };
-  const bConex = botonIcono('conexiones', 'Mostrar conexiones (Tab)', () => {
-    conexiones = !conexiones;
-    bConex.classList.toggle('activo', conexiones);
-  });
-  const bSonido = botonIcono('sonido', 'Efectos de sonido', () => alternar(bSonido, 'efectos'), ajustes.efectos ? '' : 'apagado');
-  const bMusica = botonIcono('musica', 'Música', () => alternar(bMusica, 'musica'), ajustes.musica ? '' : 'apagado');
+  const opcion = (nombre: string, texto: string, accion: () => void, clase = '') =>
+    h('button', { class: `opcion ${clase}`, role: 'menuitem', onclick: accion }, icono(nombre), h('span', {}, texto));
+  const menu = h('div', { class: 'menu-juego', role: 'menu', hidden: true });
+  let abierto = false;
+  const abrirMenu = (abrir: boolean) => {
+    abierto = abrir;
+    menu.hidden = !abrir;
+    bOpciones.classList.toggle('activo', abrir);
+  };
+  const bOpciones = botonIcono('engranaje', 'Opciones', () => abrirMenu(!abierto));
 
   const puedeReiniciar = !op.sesion || op.sesion.local === 0;
-  const acciones: HTMLElement[] = [bConex];
-  if (puedeReiniciar) acciones.push(botonIcono('reiniciar', 'Reiniciar nivel (Borrar)', () => pedirReiniciar()));
-  acciones.push(bSonido, bMusica);
-  if (op.codigo && !ES_WEB) {
-    const codigo = op.codigo;
-    const bFav = botonIcono('estrella', 'Guardar en favoritos', () => {
-      const guardado = alternarFavorito({ codigo, nombre: op.nivel.nombre, autor: op.nivel.autor });
-      bFav.classList.toggle('lleno', guardado);
-      aviso(guardado ? 'Guardado en favoritos' : 'Quitado de favoritos');
-    }, esFavorito(codigo) ? 'lleno' : '');
-    acciones.push(bFav);
+  if (puedeReiniciar) menu.append(opcion('reiniciar', 'Reiniciar nivel', () => {
+    abrirMenu(false);
+    pedirReiniciar();
+  }));
+  const bSonido = opcion('sonido', 'Efectos de sonido', () => alternar(bSonido, 'efectos'), ajustes.efectos ? '' : 'apagado');
+  const bMusica = opcion('musica', 'Música', () => alternar(bMusica, 'musica'), ajustes.musica ? '' : 'apagado');
+  menu.append(bSonido, bMusica);
+  if (PUEDE_PANTALLA) {
+    menu.append(opcion('pantalla', 'Pantalla completa', () => {
+      abrirMenu(false);
+      if (document.fullscreenElement) void document.exitFullscreen();
+      else void pedirPantallaCompleta().catch(() => undefined);
+    }));
   }
-  if (op.codigo) {
-    const codigo = op.codigo;
-    acciones.push(botonIcono('compartir', 'Compartir nivel', () => void compartirNivel(codigo, op.nivel.nombre)));
-  }
-  if (ES_WEB && document.documentElement.requestFullscreen) {
-    acciones.push(
-      botonIcono('pantalla', 'Pantalla completa', () => {
-        if (document.fullscreenElement) void document.exitFullscreen();
-        else
-          void document.documentElement
-            .requestFullscreen()
-            .then(() => (screen.orientation as any)?.lock?.('landscape'))
-            .catch(() => undefined);
-      }),
-    );
-  }
+  const fueraDelMenu = (e: PointerEvent) => {
+    if (abierto && !menu.contains(e.target as Node) && !bOpciones.contains(e.target as Node)) abrirMenu(false);
+  };
+  window.addEventListener('pointerdown', fueraDelMenu, true);
 
   const bAgarrar = h('button', { class: 'contexto sin-palanca', hidden: true }, 'Agarrar', !TACTIL && h('kbd', {}, 'Espacio'));
   bAgarrar.addEventListener('pointerdown', (e) => {
@@ -173,17 +196,15 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
   const el = h('div', { class: 'juego' },
     h('header', { class: 'barra' },
       op.alSalir && botonIcono('atras', 'Volver (Esc)', () => op.alSalir!()),
-      h('div', { class: 'titulo' },
-        h('strong', {}, op.nivel.nombre || 'Nivel sin nombre'),
-        h('span', {}, op.etiqueta ?? (op.nivel.autor ? `por ${op.nivel.autor}` : '')),
-      ),
-      h('div', { class: 'acciones' }, ...acciones),
+      h('div', { class: 'acciones' }, bOpciones, menu),
     ),
     escenario,
   );
   raiz.appendChild(el);
+  document.body.classList.add('en-partida');
 
   const vista = new Vista(canvas);
+  vista.completa = true;
   if (op.nivel.fondo) vista.fondo = op.nivel.fondo;
   const quitarPalanca = TACTIL ? montarPalanca(escenario) : null;
   limpiarEntrada();
@@ -274,11 +295,7 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
   };
 
   const ponerPista = () => {
-    let t = '';
-    if (!sim.completado) {
-      if (!sim.empezado) t = TACTIL ? 'Arrastra para moverte' : 'Muévete con WASD o las flechas';
-      else if (sim.jugador.muerto && !sim.jugador.llego) t = TACTIL ? '↺: reiniciar' : 'Borrar: reiniciar';
-    }
+    const t = '';
     if (t !== pistaActual) {
       pistaActual = t;
       pista.textContent = t;
@@ -332,10 +349,11 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
     vista.cx += temblor.x;
     vista.cy += temblor.y;
     vista.dibujar(sim, {
-      conexiones: conexiones || tecla('Tab') || !sim.empezado,
+      conexiones: tecla('Tab') || !sim.empezado,
       alfa: acumulado / paso,
       previas,
       tiempo: ahora,
+      colores: op.sesion?.colores,
     });
     vista.cx -= temblor.x;
     vista.cy -= temblor.y;
@@ -344,13 +362,36 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
   requestAnimationFrame(cuadro);
 
   const teclado = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && abierto) return abrirMenu(false);
     if (e.key === 'Escape' && op.alSalir) op.alSalir();
     if (e.key === 'Enter' && finMostrado) ((fin.querySelector('.btn.primario') ?? fin.querySelector('.btn')) as HTMLElement | null)?.click();
   };
   window.addEventListener('keydown', teclado);
 
+  let quitarGesto: (() => void) | null = null;
+  if (PUEDE_PANTALLA && !pantallaPedida && !document.fullscreenElement) {
+    pantallaPedida = true;
+    pedirPantallaCompleta().catch(() => {
+      if (!vivo || document.fullscreenElement) return;
+      const alGesto = () => {
+        quitarGesto?.();
+        if (!document.fullscreenElement) void pedirPantallaCompleta().catch(() => undefined);
+      };
+      quitarGesto = () => {
+        window.removeEventListener('pointerup', alGesto, true);
+        window.removeEventListener('keydown', alGesto, true);
+        quitarGesto = null;
+      };
+      window.addEventListener('pointerup', alGesto, true);
+      window.addEventListener('keydown', alGesto, true);
+    });
+  }
+
   return () => {
     vivo = false;
+    quitarGesto?.();
+    document.body.classList.remove('en-partida');
+    window.removeEventListener('pointerdown', fueraDelMenu, true);
     window.removeEventListener('keydown', teclado);
     quitarPalanca?.();
     vista.destruir();

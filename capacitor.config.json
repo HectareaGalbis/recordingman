@@ -4,5 +4,10 @@
   "webDir": "dist/android",
   "android": {
     "backgroundColor": "#fafafa"
+  },
+  "plugins": {
+    "SystemBars": {
+      "hidden": true
+    }
   }
 }

@@ -54,6 +54,18 @@ export interface TextoDef {
   texto: string;
 }
 
+export interface CartelDef {
+  t: 'cartel';
+  id: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  texto: string;
+  todos: boolean;
+  invisible: boolean;
+}
+
 export interface SueloDef {
   t: 'suelo';
   id: number;
@@ -177,6 +189,7 @@ export type Objeto =
   | InterruptorDef
   | MetaDef
   | TextoDef
+  | CartelDef
   | SueloDef
   | CajaDef
   | PuertaDef
@@ -198,6 +211,7 @@ export const TIPOS: Tipo[] = [
   'interruptor',
   'meta',
   'texto',
+  'cartel',
   'suelo',
   'caja',
   'puerta',
@@ -218,6 +232,7 @@ export const NOMBRES_TIPO: Record<Tipo, string> = {
   interruptor: 'Interruptor',
   meta: 'Meta',
   texto: 'Texto',
+  cartel: 'Cartel',
   suelo: 'Suelo',
   caja: 'Caja',
   puerta: 'Puerta lógica',
@@ -248,6 +263,7 @@ export const LIMITES = {
   nombre: 40,
   autor: 30,
   texto: 120,
+  cartel: 300,
   objetos: 400,
   coord: 10000,
   radioMin: 25,
@@ -370,6 +386,8 @@ export function crear(t: Tipo, id: number, x: number, y: number): Objeto {
       return { t, id, x, y, w: 100, h: 100 };
     case 'texto':
       return { t, id, x, y, texto: 'Texto' };
+    case 'cartel':
+      return { t, id, x, y, w: 150, h: 100, texto: 'Mensaje del cartel', todos: false, invisible: false };
     case 'suelo':
       return { t, id, x, y, w: 100, h: 100, color: '#e6e6e6' };
     case 'caja':
@@ -452,6 +470,12 @@ export function sanear(n: Nivel): Nivel {
         break;
       case 'texto':
         res.objetos.push({ t: o.t, id, x: X(o.x), y: Y(o.y), texto: String(o.texto ?? '').slice(0, L.texto) });
+        break;
+      case 'cartel':
+        res.objetos.push({
+          t: o.t, id, x: X(o.x), y: Y(o.y), w: lim(o.w, L.sueloMin, 2000, 150), h: lim(o.h, L.sueloMin, 2000, 100),
+          texto: String(o.texto ?? '').slice(0, L.cartel), todos: !!o.todos, invisible: !!o.invisible,
+        });
         break;
       case 'suelo':
         res.objetos.push({

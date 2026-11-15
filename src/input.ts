@@ -83,11 +83,7 @@ export function montarPalanca(zona: HTMLElement): () => void {
     if (d > R) (vx *= R / d), (vy *= R / d);
     pomo.style.transform = `translate(${vx}px, ${vy}px)`;
     if (d < 14) return fijarPalanca(0, 0);
-    const s = Math.round(Math.atan2(vy, vx) / (Math.PI / 4));
-    const DX = [1, 1, 0, -1, -1, -1, 0, 1];
-    const DY = [0, 1, 1, 1, 0, -1, -1, -1];
-    const k = (s + 8) % 8;
-    fijarPalanca(DX[k], DY[k]);
+    fijarPalanca(vx, vy);
   };
   const soltar = (e: PointerEvent) => {
     if (e.pointerId !== id) return;

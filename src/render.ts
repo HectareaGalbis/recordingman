@@ -36,6 +36,7 @@ export interface OpcionesDibujo {
   previas?: Map<object, { x: number; y: number }>;
   tiempo?: number;
   editor?: boolean;
+  colores?: { p: string; s: string }[];
 }
 
 function mostrar(ctx: CanvasRenderingContext2D, d: { invisible: boolean }, op: OpcionesDibujo): boolean {
@@ -129,6 +130,74 @@ function pin(ctx: CanvasRenderingContext2D, p: { x: number; y: number }, activo:
   ctx.stroke();
 }
 
+function poste(ctx: CanvasRenderingContext2D, cx: number, cy: number, k: number) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(k, k);
+  ctx.fillStyle = C.caja;
+  ctx.fillRect(-3, -4, 6, 22);
+  redondo(ctx, { x: -20, y: -18, w: 40, h: 24 }, 4);
+  ctx.fillStyle = C.cajaClaro;
+  ctx.fill();
+  ctx.strokeStyle = C.caja;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-12, -10);
+  ctx.lineTo(12, -10);
+  ctx.moveTo(-12, -2);
+  ctx.lineTo(6, -2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function partirTexto(ctx: CanvasRenderingContext2D, texto: string, max: number): string[] {
+  const lineas: string[] = [];
+  let actual = '';
+  for (const palabra of texto.split(/\s+/).filter(Boolean)) {
+    const prueba = actual ? `${actual} ${palabra}` : palabra;
+    if (actual && ctx.measureText(prueba).width > max) {
+      lineas.push(actual);
+      actual = palabra;
+    } else actual = prueba;
+  }
+  if (actual) lineas.push(actual);
+  return lineas;
+}
+
+function bocadillo(ctx: CanvasRenderingContext2D, x: number, y: number, texto: string) {
+  ctx.font = `15px ${FUENTE}`;
+  const lineas = partirTexto(ctx, texto, 260);
+  if (!lineas.length) return;
+  const margen = 10;
+  const alto = 20;
+  const w = Math.max(...lineas.map((l) => ctx.measureText(l).width)) + margen * 2;
+  const h = lineas.length * alto + margen * 2 - 4;
+  const abajo = y - 14;
+  const r = { x: x - w / 2, y: abajo - h, w, h };
+  ctx.fillStyle = C.blanco;
+  ctx.strokeStyle = C.tinta;
+  ctx.lineWidth = 2;
+  redondo(ctx, r, 10);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x - 8, abajo - 2);
+  ctx.lineTo(x, abajo + 10);
+  ctx.lineTo(x + 8, abajo - 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x - 8, abajo);
+  ctx.lineTo(x, abajo + 10);
+  ctx.lineTo(x + 8, abajo);
+  ctx.stroke();
+  ctx.fillStyle = C.tinta;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  lineas.forEach((l, i) => ctx.fillText(l, x, r.y + margen + i * alto));
+}
+
 export function dibujarNivel(ctx: CanvasRenderingContext2D, sim: Sim, op: OpcionesDibujo = {}) {
   const t = op.tiempo ?? 0;
 
@@ -185,6 +254,24 @@ export function dibujarNivel(ctx: CanvasRenderingContext2D, sim: Sim, op: Opcion
     ctx.closePath();
     ctx.fillStyle = actual ? C.verdeVivo : C.gris;
     ctx.fill();
+  }
+
+  for (const c of sim.carteles) {
+    if (op.editor) {
+      ctx.fillStyle = C.cajaClaro;
+      ctx.globalAlpha = 0.15;
+      ctx.fillRect(c.x, c.y, c.w, c.h);
+      ctx.globalAlpha = 0.6;
+      ctx.strokeStyle = C.caja;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(c.x, c.y, c.w, c.h);
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+    if (!mostrar(ctx, c, op)) continue;
+    poste(ctx, c.x + c.w / 2, c.y + c.h / 2, Math.min(1, Math.min(c.w, c.h) / 50));
+    ctx.globalAlpha = 1;
   }
 
   for (const p of sim.pinchos) {
@@ -431,7 +518,9 @@ export function dibujarNivel(ctx: CanvasRenderingContext2D, sim: Sim, op: Opcion
     ctx.globalAlpha = 1;
   }
 
+  let indice = -1;
   for (const m of sim.monos()) {
+    indice++;
     if (m.muerto) continue;
     let { x, y } = m;
     const p = op.previas?.get(m);
@@ -439,8 +528,9 @@ export function dibujarNivel(ctx: CanvasRenderingContext2D, sim: Sim, op: Opcion
       x = p.x + (x - p.x) * op.alfa;
       y = p.y + (y - p.y) * op.alfa;
     }
-    ctx.fillStyle = C.tinta;
-    ctx.strokeStyle = C.blanco;
+    const color = op.colores?.[indice];
+    ctx.fillStyle = color?.p ?? C.tinta;
+    ctx.strokeStyle = color?.s ?? C.blanco;
     ctx.lineWidth = 2.5;
     circulo(ctx, x, y, m.r - 1.25);
     ctx.fill();
@@ -463,6 +553,11 @@ export function dibujarNivel(ctx: CanvasRenderingContext2D, sim: Sim, op: Opcion
       ctx.fill();
     }
     ctx.globalAlpha = 1;
+  }
+
+  if (!op.editor) {
+    const c = sim.cartelActual();
+    if (c?.texto.trim()) bocadillo(ctx, c.x + c.w / 2, c.y + c.h / 2 - 18 * Math.min(1, Math.min(c.w, c.h) / 50), c.texto);
   }
 
   if (op.conexiones) dibujarConexiones(ctx, sim, op.editor);

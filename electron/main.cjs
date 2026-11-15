@@ -37,6 +37,7 @@ if (!app.requestSingleInstanceLock()) {
       height: 760,
       minWidth: 800,
       minHeight: 480,
+      fullscreen: true,
       backgroundColor: '#fafafa',
       autoHideMenuBar: true,
       title: 'RecordingMan',

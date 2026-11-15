@@ -12,7 +12,7 @@ const F_INICIO = 16;
 const F_INVISIBLE = 128;
 const CODIGOS = [
   'pared', 'paredmala', 'boton', 'botontodos', 'interruptor', 'portal', 'meta', 'texto', 'suelo', 'caja', 'puerta', 'switch',
-  'temporizador', 'control', 'pinchos', 'delay', 'terremoto', 'movil',
+  'temporizador', 'control', 'pinchos', 'delay', 'terremoto', 'movil', 'cartel',
 ] as const;
 const DESPLAZAMIENTO = 200;
 
@@ -239,6 +239,11 @@ export function codificar(nivel: Nivel): string {
         pos(o.x), pos(o.y);
         w.cadena(o.texto);
         break;
+      case 'cartel':
+        cab(o.todos ? 1 : 0);
+        pos(o.x), pos(o.y), tam(o.w), tam(o.h);
+        w.cadena(o.texto);
+        break;
       case 'suelo':
         cab(0);
         pos(o.x), pos(o.y), tam(o.w), tam(o.h);
@@ -379,6 +384,12 @@ export function decodificar(codigo: string): Nivel {
         break;
       case 'texto':
         o.texto = r.cadena();
+        break;
+      case 'cartel':
+        o.w = tam();
+        o.h = tam();
+        o.texto = r.cadena();
+        o.todos = !!(f & 1);
         break;
       case 'suelo':
         o.w = tam();
