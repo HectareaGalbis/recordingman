@@ -55,6 +55,32 @@ body {
   display: block;
 }
 
+.legal {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 14px;
+  padding: 2px 12px 3px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.legal a,
+.legal button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--suave);
+  font-size: inherit;
+  text-decoration: none;
+}
+
+.legal a:hover,
+.legal button:hover {
+  color: var(--tinta);
+  text-decoration: underline;
+}
+
 @media (min-width: 760px) and (min-height: 620px) {
   #anuncio {
     height: 90px;
@@ -157,35 +183,6 @@ button {
   align-items: center;
   gap: 4px;
   flex: none;
-}
-
-.grab {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 30px;
-  padding: 0 10px;
-  border: 2px solid var(--tinta);
-  border-radius: 7px;
-  font-weight: 700;
-  font-size: 16px;
-  font-variant-numeric: tabular-nums;
-  background: var(--papel);
-}
-
-.grab-n {
-  min-width: 14px;
-  text-align: center;
-  font-size: 18px;
-  line-height: 1;
-}
-
-.grab i {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: var(--tinta);
 }
 
 .ico {
@@ -611,26 +608,51 @@ button.tarjeta-nivel:hover {
   color: var(--suave);
 }
 
-.tactil .rec {
+.contexto {
+  --c: var(--tinta);
   position: absolute;
   right: 22px;
   bottom: 22px;
+  z-index: 2;
   width: 84px;
   height: 84px;
   border: 0;
   border-radius: 50%;
-  background: var(--rojo);
-  box-shadow: 0 0 0 4px var(--fondo), 0 0 0 7px var(--rojo);
+  display: grid;
+  place-items: center;
+  background: var(--c);
+  box-shadow: 0 0 0 4px var(--fondo), 0 0 0 7px var(--c);
   color: #ffffff;
   font-weight: 800;
-  font-size: 18px;
-  letter-spacing: 0.04em;
+  font-size: 14px;
   opacity: 0.9;
   touch-action: none;
 }
 
-.tactil .rec:active {
-  background: var(--rojo-oscuro);
+.contexto.activo {
+  --c: var(--azul);
+  opacity: 1;
+}
+
+.contexto kbd {
+  position: absolute;
+  top: -8px;
+  right: -14px;
+  height: 26px;
+  padding: 0 6px;
+  border: 2px solid var(--tinta);
+  border-radius: 7px;
+  background: var(--fondo);
+  color: var(--tinta);
+  font: 800 12px/22px system-ui, sans-serif;
+}
+
+@media (pointer: fine) {
+  .contexto {
+    width: 72px;
+    height: 72px;
+    font-size: 13px;
+  }
 }
 
 .palanca {
@@ -780,6 +802,33 @@ button.tarjeta-nivel:hover {
   justify-content: space-between;
   gap: 8px;
   font-size: 13px;
+}
+
+.campo-num.apilado {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.apilado .segmentos button {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+}
+
+input[type='color'] {
+  width: 44px;
+  height: 28px;
+  padding: 0;
+  border: 1.5px solid var(--tinta);
+  border-radius: 8px;
+  background: var(--papel);
+}
+
+.color-fondo input {
+  width: 22px;
+  height: 18px;
+  border-radius: 5px;
 }
 
 .paso {
@@ -1030,4 +1079,98 @@ details summary {
 
 .aviso.fuera {
   opacity: 0;
+}
+
+.lobby-cuerpo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 20px;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.lobby-nivel {
+  flex: 1 1 300px;
+  max-width: 420px;
+  border: 1.5px solid var(--tinta);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--papel);
+}
+
+.lobby-nivel .miniatura {
+  border-bottom: 1px solid var(--linea);
+  background: var(--fondo);
+}
+
+.lobby-nivel .titulo {
+  padding: 10px 12px;
+}
+
+.lobby-sala {
+  flex: 1 1 280px;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lobby-sala h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.lobby-sala h2 span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--suave);
+}
+
+.lobby-jugadores {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lobby-jugadores:empty {
+  display: none;
+}
+
+.lobby-jugadores li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1.5px solid var(--tinta);
+  border-radius: 9px;
+  background: var(--papel);
+}
+
+.lobby-jugadores .nom {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lobby-jugadores .etq {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--tinta);
+  color: var(--papel);
+  font-size: 11px;
+  font-weight: 700;
 }

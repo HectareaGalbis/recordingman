@@ -1,10 +1,11 @@
 import { actualizarMusica, sonar } from '../audio';
 import { ES_WEB, URL_COMPARTIR } from '../config';
 import { PARAMETRO } from '../core/codec';
-import { Nivel } from '../core/level';
-import { Mono, Sim, TICKS_POR_SEGUNDO } from '../core/sim';
-import { TACTIL, leerEntrada, limpiarEntrada, montarPalanca, pedirGrabar, pedirReiniciar, tecla } from '../input';
+import { ALTO, ANCHO, Nivel, TAM_LOGICA } from '../core/level';
+import { Entrada, Sim, TICKS_POR_SEGUNDO } from '../core/sim';
+import { TACTIL, fijarAgarre, leerEntrada, limpiarEntrada, montarPalanca, pedirReiniciar, tecla } from '../input';
 import { PUEDE_COMPARTIR, compartir, copiar, huecosAnuncioFin } from '../platform';
+import type { Sesion } from '../red';
 import { Vista } from '../render';
 import { ajustes, alternarFavorito, esFavorito, guardarAjustes } from '../store';
 import { aviso, botonIcono, h } from './dom';
@@ -16,6 +17,29 @@ export interface OpcionesJuego {
   alSalir?: () => void;
   alCompletar?: () => void;
   accionesFin?: () => HTMLElement[];
+  sesion?: Sesion;
+}
+
+const SUAVIZADO = 220;
+
+function extension(n: Nivel) {
+  let x0 = n.inicio.x;
+  let y0 = n.inicio.y;
+  let x1 = x0 + n.inicio.w;
+  let y1 = y0 + n.inicio.h;
+  const caja = (x: number, y: number, w: number, h: number) => {
+    x0 = Math.min(x0, x);
+    y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x + w);
+    y1 = Math.max(y1, y + h);
+  };
+  for (const o of n.objetos) {
+    if ('w' in o) caja(o.x, o.y, o.w, o.h);
+    else if (o.t === 'texto') caja(o.x, o.y, 0, 0);
+    else if (o.t === 'puerta' || o.t === 'switch' || o.t === 'temporizador' || o.t === 'delay' || o.t === 'terremoto') caja(o.x - TAM_LOGICA / 2, o.y - TAM_LOGICA / 2, TAM_LOGICA, TAM_LOGICA);
+    else caja(o.x - o.r, o.y - o.r, o.r * 2, o.r * 2);
+  }
+  return { x0, y0, x1, y1 };
 }
 
 export function urlDeCodigo(codigo: string): string {
@@ -29,10 +53,9 @@ export async function compartirNivel(codigo: string, nombre: string) {
 }
 
 export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
-  const sim = new Sim(op.nivel);
+  const sim = new Sim(op.nivel, op.sesion?.jugadores ?? 1, op.sesion?.local ?? 0, op.sesion?.semilla ?? 0);
   const canvas = h('canvas', { class: 'lienzo' });
   const pista = h('div', { class: 'pista' });
-  const contador = h('span', { class: 'grab-n' });
   const fin = h('div', { class: 'fin-nivel sin-palanca', hidden: true });
   let conexiones = false;
 
@@ -49,7 +72,10 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
   const bSonido = botonIcono('sonido', 'Efectos de sonido', () => alternar(bSonido, 'efectos'), ajustes.efectos ? '' : 'apagado');
   const bMusica = botonIcono('musica', 'Música', () => alternar(bMusica, 'musica'), ajustes.musica ? '' : 'apagado');
 
-  const acciones: HTMLElement[] = [bConex, botonIcono('reiniciar', 'Reiniciar nivel (Borrar)', () => pedirReiniciar()), bSonido, bMusica];
+  const puedeReiniciar = !op.sesion || op.sesion.local === 0;
+  const acciones: HTMLElement[] = [bConex];
+  if (puedeReiniciar) acciones.push(botonIcono('reiniciar', 'Reiniciar nivel (Borrar)', () => pedirReiniciar()));
+  acciones.push(bSonido, bMusica);
   if (op.codigo && !ES_WEB) {
     const codigo = op.codigo;
     const bFav = botonIcono('estrella', 'Guardar en favoritos', () => {
@@ -76,14 +102,16 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
     );
   }
 
-  const escenario = h('div', { class: 'escenario' }, canvas, pista, fin);
-  if (TACTIL) {
-    escenario.append(
-      h('div', { class: 'tactil sin-palanca' },
-        h('button', { class: 'rec', 'aria-label': 'Grabar', onpointerdown: (e: Event) => { e.preventDefault(); pedirGrabar(); } }, 'REC'),
-      ),
-    );
-  }
+  const bAgarrar = h('button', { class: 'contexto sin-palanca', hidden: true }, 'Agarrar', !TACTIL && h('kbd', {}, 'Espacio'));
+  bAgarrar.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    bAgarrar.setPointerCapture(e.pointerId);
+    fijarAgarre(true);
+  });
+  bAgarrar.addEventListener('pointerup', () => fijarAgarre(false));
+  bAgarrar.addEventListener('pointercancel', () => fijarAgarre(false));
+
+  const escenario = h('div', { class: 'escenario' }, canvas, pista, fin, bAgarrar);
 
   const el = h('div', { class: 'juego' },
     h('header', { class: 'barra' },
@@ -92,7 +120,6 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
         h('strong', {}, op.nivel.nombre || 'Nivel sin nombre'),
         h('span', {}, op.etiqueta ?? (op.nivel.autor ? `por ${op.nivel.autor}` : '')),
       ),
-      h('div', { class: 'grab', title: 'Grabaciones restantes' }, h('i', {}), contador),
       h('div', { class: 'acciones' }, ...acciones),
     ),
     escenario,
@@ -100,16 +127,63 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
   raiz.appendChild(el);
 
   const vista = new Vista(canvas);
+  if (op.nivel.fondo) vista.fondo = op.nivel.fondo;
   const quitarPalanca = TACTIL ? montarPalanca(escenario) : null;
   limpiarEntrada();
 
-  const previas = new Map<Mono, { x: number; y: number }>();
+  const previas = new Map<object, { x: number; y: number }>();
   const paso = 1000 / TICKS_POR_SEGUNDO;
   let acumulado = 0;
   let ultimo = performance.now();
   let vivo = true;
   let finMostrado = false;
   let pistaActual = '';
+
+  const ext = extension(op.nivel);
+  let libre = false;
+  let arrastre: { id: number; x: number; y: number } | null = null;
+
+  const seguir = (k: number) => {
+    const j = sim.jugador;
+    let { x, y } = j;
+    const p = previas.get(j);
+    if (p && Math.abs(p.x - x) <= 10 && Math.abs(p.y - y) <= 10) {
+      const a = acumulado / paso;
+      x = p.x + (x - p.x) * a;
+      y = p.y + (y - p.y) * a;
+    }
+    vista.cx += (x - ANCHO / 2 - vista.cx) * k;
+    vista.cy += (y - ALTO / 2 - vista.cy) * k;
+  };
+  seguir(1);
+
+  const alPulsar = (e: PointerEvent) => {
+    if (arrastre || sim.empezado || finMostrado) return;
+    if (TACTIL && e.pointerType !== 'mouse') {
+      const r = escenario.getBoundingClientRect();
+      if (e.clientX - r.left <= r.width * 0.6) return;
+    }
+    arrastre = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    canvas.setPointerCapture(e.pointerId);
+  };
+  const alMover = (e: PointerEvent) => {
+    if (!arrastre || e.pointerId !== arrastre.id) return;
+    if (sim.empezado) return void (arrastre = null);
+    const cx = vista.cx - (e.clientX - arrastre.x) / vista.escala;
+    const cy = vista.cy - (e.clientY - arrastre.y) / vista.escala;
+    vista.cx = Math.min(ext.x1 - ANCHO / 2, Math.max(ext.x0 - ANCHO / 2, cx));
+    vista.cy = Math.min(ext.y1 - ALTO / 2, Math.max(ext.y0 - ALTO / 2, cy));
+    arrastre.x = e.clientX;
+    arrastre.y = e.clientY;
+    libre = true;
+  };
+  const alSoltar = (e: PointerEvent) => {
+    if (arrastre && e.pointerId === arrastre.id) arrastre = null;
+  };
+  canvas.addEventListener('pointerdown', alPulsar);
+  canvas.addEventListener('pointermove', alMover);
+  canvas.addEventListener('pointerup', alSoltar);
+  canvas.addEventListener('pointercancel', alSoltar);
 
   const mostrarFin = () => {
     finMostrado = true;
@@ -120,9 +194,9 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
         anuncios.izq,
         h('div', { class: 'fin-caja' },
           h('h2', {}, 'Nivel superado'),
-          h('p', {}, `${sim.grabacionesUsadas} ${sim.grabacionesUsadas === 1 ? 'grabación' : 'grabaciones'} · ${seg} s`),
+          h('p', {}, `${seg} s`),
           h('div', { class: 'fila centro' },
-            h('button', { class: 'btn', onclick: repetir }, 'Repetir'),
+            puedeReiniciar && h('button', { class: 'btn', onclick: repetir }, 'Repetir'),
             ...(op.accionesFin?.() ?? []),
           ),
         ),
@@ -135,6 +209,7 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
   };
 
   const repetir = () => {
+    if (op.sesion) return pedirReiniciar();
     fin.hidden = true;
     finMostrado = false;
     sim.reiniciar();
@@ -144,8 +219,8 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
   const ponerPista = () => {
     let t = '';
     if (!sim.completado) {
-      if (!sim.empezado) t = TACTIL ? 'Arrastra para moverte · REC para llamar a una grabación' : 'Muévete con WASD o las flechas · R para grabarte';
-      else if (sim.jugador.muerto) t = TACTIL ? 'REC: nueva grabación · ↺: reiniciar' : 'R: nueva grabación · Borrar: reiniciar';
+      if (!sim.empezado) t = TACTIL ? 'Arrastra para moverte' : 'Muévete con WASD o las flechas';
+      else if (sim.jugador.muerto && !sim.jugador.llego) t = TACTIL ? '↺: reiniciar' : 'Borrar: reiniciar';
     }
     if (t !== pistaActual) {
       pistaActual = t;
@@ -156,29 +231,57 @@ export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {
 
   const cuadro = (ahora: number) => {
     if (!vivo) return;
+    const dt = Math.min(ahora - ultimo, 100);
     acumulado = Math.min(acumulado + (ahora - ultimo), paso * 5);
     ultimo = ahora;
     while (acumulado >= paso) {
       acumulado -= paso;
-      previas.clear();
-      for (const m of sim.monos()) previas.set(m, { x: m.x, y: m.y });
+      let primero = true;
+      const tick = (es: Entrada[]) => {
+        if (primero) {
+          primero = false;
+          previas.clear();
+          for (const m of [...sim.monos(), ...sim.cajas]) previas.set(m, { x: m.x, y: m.y });
+        }
+        sim.tick(es);
+        for (const ev of sim.eventos) {
+          sonar(ev);
+          if (ev === 'completado') setTimeout(() => vivo && sim.completado && !finMostrado && mostrarFin(), 1000);
+          if (ev === 'reiniciar' && finMostrado) {
+            fin.hidden = true;
+            finMostrado = false;
+          }
+        }
+      };
       const e = leerEntrada();
-      if (sim.completado) sim.tick({ dx: 0, dy: 0, grabar: false, reiniciar: false });
-      else sim.tick(e);
-      for (const ev of sim.eventos) {
-        sonar(ev);
-        if (ev === 'sin_grabaciones') aviso('No te quedan grabaciones');
-        if (ev === 'completado') setTimeout(() => vivo && sim.completado && !finMostrado && mostrarFin(), 700);
+      if (sim.completado) {
+        e.dx = 0;
+        e.dy = 0;
+        if (!op.sesion) e.reiniciar = false;
       }
+      if (op.sesion) op.sesion.paso(e, tick, (i) => sim.quitar(i));
+      else tick([e]);
     }
-    contador.textContent = sim.restantes < 0 ? '∞' : String(sim.restantes);
     ponerPista();
+    const agarrable = !finMostrado && sim.puedeAgarrar();
+    if (bAgarrar.hidden === agarrable) {
+      bAgarrar.hidden = !agarrable;
+      if (!agarrable) fijarAgarre(false);
+    }
+    bAgarrar.classList.toggle('activo', !!sim.cajaAgarrada());
+    if (sim.empezado) libre = false;
+    if (!libre) seguir(1 - Math.exp(-dt / SUAVIZADO));
+    const temblor = sim.temblor(ahora);
+    vista.cx += temblor.x;
+    vista.cy += temblor.y;
     vista.dibujar(sim, {
       conexiones: conexiones || tecla('Tab') || !sim.empezado,
       alfa: acumulado / paso,
       previas,
       tiempo: ahora,
     });
+    vista.cx -= temblor.x;
+    vista.cy -= temblor.y;
     requestAnimationFrame(cuadro);
   };
   requestAnimationFrame(cuadro);

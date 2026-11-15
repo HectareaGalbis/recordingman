@@ -2,8 +2,11 @@ import { PAQUETE_ANDROID, URL_ANDROID, URL_COMPARTIR, URL_PC } from '../config';
 import { nivelIncluido } from '../core/builtin';
 import { PARAMETRO, decodificar, extraerCodigo } from '../core/codec';
 import { Nivel } from '../core/level';
+import { PUEDE_REVOCAR, revocarConsentimiento } from '../platform';
+import { extraerSala } from '../red';
 import { aviso, h } from './dom';
-import { compartirNivel, montarJuego } from './juego';
+import { compartirNivel } from './juego';
+import { montarLobby } from './lobby';
 
 function enlaceApp(codigo: string): string {
   const host = URL_COMPARTIR.replace(/^https?:\/\//, '').replace(/\/+$/, '');
@@ -26,9 +29,17 @@ export function iniciarWeb() {
   if (nivel?.nombre) document.title = `${nivel.nombre} · RecordingMan`;
   const android = /Android/i.test(navigator.userAgent);
 
-  montarJuego(raiz, {
+  raiz.after(
+    h('nav', { class: 'legal', 'aria-label': 'Privacidad' },
+      h('a', { href: './privacidad.html', target: '_blank', rel: 'noopener' }, 'Privacidad'),
+      PUEDE_REVOCAR && h('button', { type: 'button', onclick: revocarConsentimiento }, 'Cookies'),
+    ),
+  );
+
+  montarLobby(raiz, {
     nivel: nivel ?? nivelIncluido(0),
     codigo: compartido,
+    sala: (compartido && extraerSala(location.search + location.hash)) || undefined,
     accionesFin: () => {
       const b: HTMLElement[] = [];
       if (compartido) b.push(h('button', { class: 'btn primario', onclick: () => void compartirNivel(compartido, nivel!.nombre) }, 'Compartir'));

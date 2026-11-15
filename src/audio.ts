@@ -52,11 +52,6 @@ function ruido(dur: number, vol = 0.15) {
 
 const SONIDOS: Record<Evento, () => void> = {
   empezar: () => tono(440, 660, 0.09, 'triangle'),
-  grabar: () => {
-    tono(520, 520, 0.07, 'square', 0.06);
-    tono(780, 780, 0.1, 'square', 0.06, 0.08);
-  },
-  sin_grabaciones: () => tono(160, 110, 0.18, 'sawtooth', 0.07),
   reiniciar: () => tono(500, 250, 0.12, 'triangle'),
   muerte: () => {
     ruido(0.3);
@@ -66,7 +61,7 @@ const SONIDOS: Record<Evento, () => void> = {
   completado: () => [523, 659, 784, 1047].forEach((f, i) => tono(f, f, 0.22, 'triangle', 0.12, 0.15 + i * 0.11)),
   boton: () => tono(330, 300, 0.06, 'sine', 0.1),
   interruptor: () => tono(900, 600, 0.05, 'square', 0.05),
-  portal: () => tono(300, 1200, 0.16, 'sine', 0.1),
+  caida: () => tono(400, 80, 0.35, 'sine', 0.12),
 };
 
 export function sonar(e: Evento) {

@@ -40,6 +40,7 @@ const ICONOS: Record<string, string> = {
   enlace: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   seleccionar: '<path d="M6 3l12 9-5.5 1L10 19z"/>',
   cerrar: '<path d="M6 6l12 12M18 6L6 18"/>',
+  desplazar: '<path d="M12 3v18M3 12h18"/><path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>',
 };
 
 export function icono(nombre: string): SVGElement {

@@ -1,8 +1,10 @@
 import type { Entrada } from './core/sim';
 
+export const TECLA_AGARRAR = 'Space';
+
 const pulsadas = new Set<string>();
-let grabar = false;
 let reiniciar = false;
+let agarre = false;
 let palanca = { dx: 0, dy: 0 };
 
 function esCampo(e: Event): boolean {
@@ -15,12 +17,12 @@ window.addEventListener('keydown', (e) => {
   if (e.code.startsWith('Arrow') || e.code === 'Space' || e.code === 'Tab' || e.code === 'Backspace') e.preventDefault();
   if (e.repeat) return;
   pulsadas.add(e.code);
-  if (e.code === 'KeyR') grabar = true;
   if (e.code === 'Backspace') reiniciar = true;
 });
 window.addEventListener('keyup', (e) => pulsadas.delete(e.code));
 window.addEventListener('blur', () => {
   pulsadas.clear();
+  agarre = false;
   palanca = { dx: 0, dy: 0 };
 });
 
@@ -28,12 +30,12 @@ export function tecla(codigo: string): boolean {
   return pulsadas.has(codigo);
 }
 
-export function pedirGrabar() {
-  grabar = true;
-}
-
 export function pedirReiniciar() {
   reiniciar = true;
+}
+
+export function fijarAgarre(v: boolean) {
+  agarre = v;
 }
 
 export function fijarPalanca(dx: number, dy: number) {
@@ -41,8 +43,8 @@ export function fijarPalanca(dx: number, dy: number) {
 }
 
 export function limpiarEntrada() {
-  grabar = false;
   reiniciar = false;
+  agarre = false;
   palanca = { dx: 0, dy: 0 };
 }
 
@@ -54,8 +56,7 @@ export function leerEntrada(): Entrada {
   let dx = izquierda ? -1 : derecha ? 1 : 0;
   let dy = arriba ? -1 : abajo ? 1 : 0;
   if (!dx && !dy) ({ dx, dy } = palanca);
-  const e = { dx, dy, grabar, reiniciar };
-  grabar = false;
+  const e = { dx, dy, agarrar: agarre || tecla(TECLA_AGARRAR), reiniciar };
   reiniciar = false;
   return e;
 }

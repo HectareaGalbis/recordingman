@@ -4,6 +4,7 @@ import { codificar, decodificar, extraerCodigo } from '../core/codec';
 import { URL_COMPARTIR } from '../config';
 import { clonar, nivelVacio } from '../core/level';
 import { PUEDE_REVOCAR, PUEDE_SALIR, alAbrirUrl, alAtras, anuncio, revocarConsentimiento, salir } from '../platform';
+import { extraerSala } from '../red';
 import { miniatura } from '../render';
 import {
   ajustes, alternarFavorito, borrarPropio, favoritos, guardarAjustes, guardarPropio, marcarSuperado, nuevoId, progreso, propios,
@@ -11,6 +12,7 @@ import {
 import { aviso, botonIcono, confirmar, h, icono, modal } from './dom';
 import { montarEditor } from './editor';
 import { compartirNivel, montarJuego } from './juego';
+import { montarLobby } from './lobby';
 
 const raiz = document.getElementById('app')!;
 let desmontar: (() => void) | null = null;
@@ -127,7 +129,7 @@ function jugarIncluido(i: number) {
   mostrar(el, niveles, false, limpiar);
 }
 
-export function jugarCompartido(codigo: string, volver: () => void = menu) {
+export function jugarCompartido(codigo: string, volver: () => void = menu, sala?: string) {
   let nivel;
   try {
     nivel = decodificar(codigo);
@@ -136,16 +138,17 @@ export function jugarCompartido(codigo: string, volver: () => void = menu) {
     return;
   }
   const el = h('div', { class: 'pantalla' });
-  const limpiar = montarJuego(el, {
+  const limpiar = montarLobby(el, {
     nivel,
     codigo,
+    sala,
     alSalir: volver,
     accionesFin: () => [h('button', { class: 'btn primario', onclick: volver }, 'Continuar')],
   });
   mostrar(el, volver, false, limpiar);
 }
 
-function pedirEnlace(titulo: string, accion: string, alAceptar: (codigo: string) => void) {
+function pedirEnlace(titulo: string, accion: string, alAceptar: (codigo: string, sala?: string) => void) {
   const campo = h('input', { type: 'text', placeholder: 'https://…/?l=…', autocomplete: 'off', spellcheck: false });
   const error = h('p', { class: 'error' });
   const aceptar = () => {
@@ -154,7 +157,7 @@ function pedirEnlace(titulo: string, accion: string, alAceptar: (codigo: string)
       if (!codigo) throw new Error('Eso no parece un enlace de RecordingMan');
       decodificar(codigo);
       m.cerrar();
-      alAceptar(codigo);
+      alAceptar(codigo, extraerSala(campo.value) ?? undefined);
     } catch (e) {
       error.textContent = (e as Error).message;
     }
@@ -204,7 +207,7 @@ function pantallaFavoritos() {
       ),
     );
   }
-  const anadir = h('button', { class: 'btn primario', onclick: () => pedirEnlace('Añadir desde enlace', 'Jugar', (c) => jugarCompartido(c, pantallaFavoritos)) }, icono('enlace'), 'Abrir enlace');
+  const anadir = h('button', { class: 'btn primario', onclick: () => pedirEnlace('Añadir desde enlace', 'Jugar', (c, s) => jugarCompartido(c, pantallaFavoritos, s)) }, icono('enlace'), 'Abrir enlace');
   mostrar(
     h('div', { class: 'pantalla' },
       cabecera('Favoritos', menu, anadir),
@@ -285,6 +288,6 @@ export function iniciarApp() {
   menu();
   alAbrirUrl((url) => {
     const codigo = extraerCodigo(url);
-    if (codigo) jugarCompartido(codigo);
+    if (codigo) jugarCompartido(codigo, menu, extraerSala(url) ?? undefined);
   });
 }

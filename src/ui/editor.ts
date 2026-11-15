@@ -1,11 +1,13 @@
 import { codificar } from '../core/codec';
 import {
-  ALTO, ANCHO, LIMITES, NOMBRES_TIPO, Nivel, Objeto, TIPOS, Tipo, clonar, crear, esActivador, esReceptor, sanear, siguienteId,
+  ALTO, ANCHO, LIMITES, MODOS_MOVIL, MovilDef, NOMBRES_TIPO, Nivel, OPERACIONES, Objeto, Ranura, TAM_LOGICA, TIPOS, Tipo, clonar, crear, esActivador,
+  miembrosMoviles, ranuras, sanear, siguienteId, zonasObjeto,
 } from '../core/level';
 import { Sim } from '../core/sim';
 import { aTexto, desdeTexto } from '../core/text';
+import { TACTIL } from '../input';
 import { PUEDE_COMPARTIR, compartir, copiar } from '../platform';
-import { C, Vista, dibujarNivel, simEstatica } from '../render';
+import { BORDE_MOVIL, C, Vista, dibujarNivel, pinEntrada, pinSalida, simEstatica } from '../render';
 import { aviso, botonIcono, h, icono, modal } from './dom';
 import { montarJuego, urlDeCodigo } from './juego';
 
@@ -22,58 +24,85 @@ interface Asa {
 
 type Arrastre =
   | { tipo: 'mover'; id: number | 'inicio'; dx: number; dy: number; extremo: 0 | 1 | 2 }
-  | { tipo: 'asa'; id: number; i: number }
-  | { tipo: 'crear'; id: number; ox: number; oy: number };
+  | { tipo: 'asa'; id: number | 'inicio'; i: number }
+  | { tipo: 'crear'; id: number; ox: number; oy: number }
+  | { tipo: 'grupo'; x: number; y: number; orig: Map<number, number[]> };
 
-const ORDEN_TOQUE: Tipo[] = ['texto', 'laser', 'placa', 'portal', 'interruptor', 'botonmalo', 'boton', 'paredmala', 'pared', 'meta'];
+const ORDEN_TOQUE: Tipo[] = ['movil', 'texto', 'puerta', 'switch', 'temporizador', 'delay', 'terremoto', 'caja', 'interruptor', 'botontodos', 'boton', 'paredmala', 'pared', 'pinchos', 'meta', 'control', 'suelo'];
 const FLECHAS = ['↑', '→', '↓', '←'];
-const REJILLAS = [5, 25, 1];
+const REJILLA = 25;
+const NOMBRE_RANURA: Record<Ranura, string> = { por: 'Entrada', a: 'Entrada A', b: 'Entrada B' };
+const NOMBRE_PALETA: Partial<Record<Tipo, string>> = { botontodos: 'Botón todos', puerta: 'Puerta', control: 'Control', movil: 'Móvil' };
+const NOTA_OPERACION = {
+  and: 'Se activa cuando sus dos entradas están activas.',
+  or: 'Se activa cuando al menos una entrada está activa.',
+  xand: 'Se activa cuando sus dos entradas valen lo mismo.',
+  xor: 'Se activa cuando solo una de sus entradas está activa.',
+  not: 'Se activa cuando su entrada no lo está.',
+};
+
+function limitesRect(t: Tipo): [number, number] {
+  if (t === 'meta') return [LIMITES.metaMin, LIMITES.metaMax];
+  if (t === 'caja') return [LIMITES.cajaMin, LIMITES.cajaMax];
+  if (t === 'suelo' || t === 'control' || t === 'pinchos' || t === 'movil') return [LIMITES.sueloMin, 2000];
+  return [LIMITES.paredMin, 2000];
+}
+
+function ref(o: Objeto, r: Ranura): number | null {
+  return (o as unknown as Record<Ranura, number | null>)[r] ?? null;
+}
+
+function fijarRef(o: Objeto, r: Ranura, v: number | null) {
+  (o as unknown as Record<Ranura, number | null>)[r] = v;
+}
 
 const AYUDA_CODIGO = `nombre Mi nivel
 autor Yo
-grabaciones 3            (o inf)
-inicio 650 600
+fondo #fafafa
+inicio 600 550 100x100
+suelo 100 100 200x100 color=#e6e6e6
 pared 50 300 350x50
-pared 50 300 350x50 abre=derecha vel=2/40 por=b1
+pared 50 300 350x50 abre=derecha tiempo=0.5/0.1 por=b1
 paredmala 400 0 50x200 por=b1 invertida
-boton b1 200 200 r=50 peso=1
-botonmalo m1 600 300
+boton b1 200 200 r=50
+botontodos t1 600 300
 interruptor i1 300 300
-placa p1 100 100 lado=50
-laser 500 0 abajo blanco por=i1
-portal 100 100 > 900 500
-meta 1000 100 100x100 n=1
+control 400 300 100x100
+pinchos 100 400 200x50 apagado por=b1
+movil 600 400 100x100 ruta=200,0;200,-100 vel=100 modo=idavuelta apagada atras=50 por=b1
+caja 500 300 50x50
+puerta g1 700 300 and a=b1 b=i1     (and, or, xand, xor, not)
+switch s1 800 300 activo por=g1
+temporizador r1 900 300 activo=1 inactivo=2.5
+delay d1 1000 300 tiempo=1.5 por=b1
+terremoto 1100 300 intensidad=10 frecuencia=15 radio=300 activo por=b1
+meta 1000 100 100x100
 texto 200 500 "Un mensaje"`;
 
 function limitar(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
 }
 
-function cajaLaser(o: { x: number; y: number; dir: number }) {
-  return o.dir === 0 ? { x: o.x, y: o.y - 30, w: 40, h: 30 }
-    : o.dir === 1 ? { x: o.x, y: o.y, w: 30, h: 40 }
-    : o.dir === 2 ? { x: o.x, y: o.y, w: 40, h: 30 }
-    : { x: o.x - 30, y: o.y, w: 30, h: 40 };
-}
-
 function iconoHerramienta(t: Tipo | null): HTMLElement {
   if (!t) return icono('seleccionar') as unknown as HTMLElement;
   const c = h('canvas', { width: 56, height: 56, class: 'ico-herr' });
   const ctx = c.getContext('2d')!;
-  const n: Nivel = { nombre: '', autor: '', grabaciones: -1, inicio: { x: -500, y: -500 }, objetos: [] };
+  const n: Nivel = { nombre: '', autor: '', fondo: C.fondo, inicio: { x: -500, y: -500, w: 100, h: 100 }, objetos: [] };
   const o = crear(t, 1, 0, 0) as any;
   if (t === 'pared' || t === 'paredmala') Object.assign(o, { x: 4, y: 18, w: 48, h: 20 });
-  else if (t === 'boton' || t === 'botonmalo' || t === 'interruptor') Object.assign(o, { x: 28, y: 30, r: 22 });
-  else if (t === 'placa') Object.assign(o, { x: 8, y: 8, lado: 40 });
-  else if (t === 'laser') Object.assign(o, { x: 8, y: 2 });
-  else if (t === 'portal') Object.assign(o, { x: 28, y: 28, x2: 28, y2: 28, r: 22 });
+  else if (t === 'control') Object.assign(o, { x: 6, y: 6, w: 44, h: 44 });
+  else if (t === 'pinchos') Object.assign(o, { x: 4, y: 14, w: 48, h: 28 });
+  else if (t === 'movil') Object.assign(o, { x: 6, y: 6, w: 44, h: 44, ruta: [] });
+  else if (t === 'boton' || t === 'botontodos' || t === 'interruptor') Object.assign(o, { x: 28, y: 30, r: 22 });
+  else if (t === 'suelo') Object.assign(o, { x: 6, y: 12, w: 44, h: 32, color: '#c9c9c9' });
+  else if (t === 'caja') Object.assign(o, { x: 6, y: 6, w: 44, h: 44 });
+  else if (t === 'puerta' || t === 'switch' || t === 'temporizador' || t === 'delay' || t === 'terremoto') Object.assign(o, { x: 28, y: 28 });
   else if (t === 'meta') Object.assign(o, { x: 8, y: 14, w: 40, h: 34 });
   else if (t === 'texto') Object.assign(o, { x: -100, y: -100 });
   n.objetos.push(o);
   const sim = new Sim(n);
-  if (t === 'laser') sim.laseres[0].largo = 52;
   sim.jugador.muerto = true;
-  dibujarNivel(ctx, sim);
+  dibujarNivel(ctx, sim, { editor: true });
   if (t === 'texto') {
     ctx.fillStyle = C.texto;
     ctx.font = '700 44px Georgia, serif';
@@ -89,11 +118,14 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
   let sim = simEstatica(nivel);
   let sel: number | 'inicio' | null = null;
   let herramienta: Tipo | null = null;
-  let conectando: number | null = null;
+  let conectando: { id: number; ranura: Ranura | null } | null = null;
   let arrastre: Arrastre | null = null;
   let movido = false;
-  let rejilla = 5;
+  const rejilla = REJILLA;
   let puntero = { x: 0, y: 0 };
+  let pan: { id: number; x: number; y: number } | null = null;
+  let mapa = false;
+  let grupo: number[] = [];
   let cerrarPrueba: (() => void) | null = null;
   let vivo = true;
   const historial: string[] = [JSON.stringify(nivel)];
@@ -103,13 +135,18 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
   const pista = h('div', { class: 'pista visible' });
   const inspector = h('aside', { class: 'inspector sin-palanca' });
   const paleta = h('div', { class: 'paleta' });
-  const titulo = h('button', { class: 'titulo titulo-boton', title: 'Nombre, autor y grabaciones', onclick: () => abrirDatos() });
+  const titulo = h('button', { class: 'titulo titulo-boton', title: 'Nombre y autor', onclick: () => abrirDatos() });
   const bDeshacer = botonIcono('deshacer', 'Deshacer (Ctrl+Z)', () => saltar(-1));
   const bRehacer = botonIcono('rehacer', 'Rehacer (Ctrl+Y)', () => saltar(1));
-  const bRejilla = h('button', { class: 'btn compacto', title: 'Tamaño de la rejilla de ajuste', onclick: () => {
-    rejilla = REJILLAS[(REJILLAS.indexOf(rejilla) + 1) % REJILLAS.length];
-    pintarBarra();
-  } });
+  const bFondo = h('input', { type: 'color', value: nivel.fondo });
+  bFondo.addEventListener('input', () => {
+    nivel.fondo = bFondo.value;
+    vista.fondo = nivel.fondo;
+  });
+  bFondo.addEventListener('change', () => {
+    nivel.fondo = bFondo.value;
+    cambio(true);
+  });
   const capaPrueba = h('div', { class: 'capa-prueba', hidden: true });
 
   const el = h('div', { class: 'editor' },
@@ -117,7 +154,8 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
       botonIcono('atras', 'Volver (Esc)', () => op.alSalir()),
       titulo,
       h('div', { class: 'acciones' },
-        bDeshacer, bRehacer, bRejilla,
+        bDeshacer, bRehacer,
+        h('label', { class: 'btn compacto color-fondo', title: 'Color de fondo del nivel' }, 'Fondo', bFondo),
         botonIcono('codigo', 'Ver o editar el código del nivel', () => abrirCodigo()),
         botonIcono('compartir', 'Compartir nivel', () => abrirCompartir()),
         h('button', { class: 'btn primario', onclick: () => probar() }, icono('jugar'), 'Probar'),
@@ -128,6 +166,7 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
   );
   raiz.appendChild(el);
   const vista = new Vista(canvas);
+  vista.completa = true;
 
   const obj = (id: number | 'inicio' | null) => (typeof id === 'number' ? nivel.objetos.find((o) => o.id === id) ?? null : null);
   const ajustar = (v: number) => Math.round(v / rejilla) * rejilla;
@@ -150,6 +189,8 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
     hi += d;
     nivel = JSON.parse(historial[hi]);
     if (typeof sel === 'number' && !obj(sel)) sel = null;
+    grupo = grupo.filter((id) => obj(id));
+    normalizarGrupo();
     sim = simEstatica(nivel);
     op.alCambiar(clonar(nivel));
     pintarBarra();
@@ -159,28 +200,44 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
   function pintarBarra() {
     titulo.replaceChildren(
       h('strong', {}, nivel.nombre || 'Nivel sin nombre'),
-      h('span', {}, `${nivel.autor ? `por ${nivel.autor}` : 'Sin autor'} · ${nivel.grabaciones < 0 ? '∞ grabaciones' : `${nivel.grabaciones} grab.`} ✎`),
+      h('span', {}, `${nivel.autor ? `por ${nivel.autor}` : 'Sin autor'} ✎`),
     );
     bDeshacer.disabled = hi === 0;
     bRehacer.disabled = hi === historial.length - 1;
-    bRejilla.textContent = `Rejilla ${rejilla}`;
+    bFondo.value = nivel.fondo;
+    vista.fondo = nivel.fondo;
   }
 
   function pintarPaleta() {
-    paleta.replaceChildren(
-      ...[null, ...TIPOS].map((t) =>
+    const botones = [null, ...TIPOS].map((t) =>
+      h('button', {
+        class: `herr ${!mapa && herramienta === t ? 'activa' : ''}`,
+        title: t ? `Añadir ${NOMBRES_TIPO[t].toLowerCase()}` : 'Seleccionar y mover',
+        onclick: () => {
+          herramienta = t;
+          conectando = null;
+          mapa = false;
+          pintarPaleta();
+          pintarInspector();
+        },
+      }, iconoHerramienta(t), h('span', {}, t ? NOMBRE_PALETA[t] ?? NOMBRES_TIPO[t] : 'Mover')),
+    );
+    if (TACTIL) {
+      botones.splice(1, 0,
         h('button', {
-          class: `herr ${herramienta === t ? 'activa' : ''}`,
-          title: t ? `Añadir ${NOMBRES_TIPO[t].toLowerCase()}` : 'Seleccionar y mover',
+          class: `herr ${mapa ? 'activa' : ''}`,
+          title: 'Mover el mapa',
           onclick: () => {
-            herramienta = t;
+            mapa = true;
+            herramienta = null;
             conectando = null;
             pintarPaleta();
             pintarInspector();
           },
-        }, iconoHerramienta(t), h('span', {}, t ? NOMBRES_TIPO[t] : 'Mover')),
-      ),
-    );
+        }, icono('desplazar'), h('span', {}, 'Mapa')),
+      );
+    }
+    paleta.replaceChildren(...botones);
   }
 
   function campoNumero(etiqueta: string, valor: number, min: number, max: number, paso: number, poner: (v: number) => void): HTMLElement {
@@ -203,7 +260,41 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
     );
   }
 
-  function campoOpciones(etiqueta: string, opciones: string[], valor: number, poner: (i: number) => void): HTMLElement {
+  function campoSegundos(etiqueta: string, decimas: number, poner: (v: number) => void, min = LIMITES.tiempoMin): HTMLElement {
+    const max = LIMITES.tiempoMax;
+    const entrada = h('input', { type: 'number', value: String(decimas / 10), min: String(min / 10), max: String(max / 10), step: '0.1', inputMode: 'decimal' });
+    const fijar = (s: number, reescribir: boolean) => {
+      if (!Number.isFinite(s)) return;
+      const v = limitar(Math.round(s * 10), min, max);
+      if (reescribir) entrada.value = String(v / 10);
+      poner(v);
+      cambio(true);
+    };
+    entrada.addEventListener('input', () => fijar(parseFloat(entrada.value), false));
+    entrada.addEventListener('blur', () => fijar(parseFloat(entrada.value) || min / 10, true));
+    return h('label', { class: 'campo-num' }, h('span', {}, etiqueta),
+      h('div', { class: 'paso' },
+        h('button', { type: 'button', 'aria-label': `Reducir ${etiqueta}`, onclick: () => fijar(parseFloat(entrada.value) - 0.5, true) }, '−'),
+        entrada,
+        h('button', { type: 'button', 'aria-label': `Aumentar ${etiqueta}`, onclick: () => fijar(parseFloat(entrada.value) + 0.5, true) }, '+'),
+      ),
+    );
+  }
+
+  function campoColor(etiqueta: string, valor: string, poner: (v: string) => void): HTMLElement {
+    const entrada = h('input', { type: 'color', value: valor });
+    entrada.addEventListener('input', () => {
+      poner(entrada.value);
+      cambio(false);
+    });
+    entrada.addEventListener('change', () => {
+      poner(entrada.value);
+      cambio(true);
+    });
+    return h('label', { class: 'campo-num' }, h('span', {}, etiqueta), entrada);
+  }
+
+  function campoOpciones(etiqueta: string, opciones: string[], valor: number, poner: (i: number) => void, apilado = false): HTMLElement {
     const grupo = h('div', { class: 'segmentos' });
     opciones.forEach((texto, i) =>
       grupo.append(h('button', { type: 'button', class: i === valor ? 'activo' : '', onclick: () => {
@@ -212,7 +303,7 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
         pintarInspector();
       } }, texto)),
     );
-    return h('div', { class: 'campo-num' }, h('span', {}, etiqueta), grupo);
+    return h('div', { class: apilado ? 'campo-num apilado' : 'campo-num' }, h('span', {}, etiqueta), grupo);
   }
 
   function nombreDe(o: Objeto): string {
@@ -220,15 +311,38 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
     return `${NOMBRES_TIPO[o.t]} ${mismos.indexOf(o) + 1}`;
   }
 
+  function normalizarGrupo() {
+    if (grupo.length === 1) sel = grupo[0];
+    if (grupo.length < 2) grupo = [];
+  }
+
+  function alternarGrupo(id: number) {
+    if (!grupo.length && typeof sel === 'number') grupo = [sel];
+    grupo = grupo.includes(id) ? grupo.filter((x) => x !== id) : [...grupo, id];
+    sel = null;
+    normalizarGrupo();
+  }
+
   function pintarInspector() {
+    if (grupo.length) {
+      inspector.hidden = !!herramienta || !!conectando;
+      inspector.replaceChildren(
+        h('h3', {}, `${grupo.length} objetos seleccionados`),
+        h('p', { class: 'nota' }, 'Arrastra cualquiera de ellos para moverlos juntos. Ctrl + clic añade o quita objetos de la selección.'),
+        h('div', { class: 'fila' }, botonIcono('duplicar', 'Duplicar (Ctrl+D)', duplicar)),
+      );
+      return;
+    }
     const o = obj(sel);
-    inspector.hidden = (!o && sel !== 'inicio') || !!herramienta || conectando != null;
+    inspector.hidden = (!o && sel !== 'inicio') || !!herramienta || !!conectando;
     if (sel === 'inicio') {
       inspector.replaceChildren(
         h('h3', {}, 'Punto de inicio'),
-        campoNumero('X', nivel.inicio.x, 0, ANCHO, rejilla, (v) => (nivel.inicio.x = v)),
-        campoNumero('Y', nivel.inicio.y, 0, ALTO, rejilla, (v) => (nivel.inicio.y = v)),
-        h('p', { class: 'nota' }, 'Aquí aparecen el jugador y todas sus grabaciones.'),
+        campoNumero('X', nivel.inicio.x, -LIMITES.coord, LIMITES.coord, rejilla, (v) => (nivel.inicio.x = v)),
+        campoNumero('Y', nivel.inicio.y, -LIMITES.coord, LIMITES.coord, rejilla, (v) => (nivel.inicio.y = v)),
+        campoNumero('Ancho', nivel.inicio.w, LIMITES.inicioMin, 2000, rejilla, (v) => (nivel.inicio.w = v)),
+        campoNumero('Alto', nivel.inicio.h, LIMITES.inicioMin, 2000, rejilla, (v) => (nivel.inicio.h = v)),
+        h('p', { class: 'nota' }, 'Aquí aparece el jugador, junto a la bandera. En una partida con varios jugadores, cada uno aparece en un punto al azar del rectángulo.'),
       );
       return;
     }
@@ -245,18 +359,70 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
         if (o.por != null) {
           filas.push(
             campoOpciones('Se abre hacia', FLECHAS, o.abre, (i) => (o.abre = i)),
-            campoNumero('Vel. abrir', o.velAbrir, 0, L.vel, 1, (v) => (o.velAbrir = v)),
-            campoNumero('Vel. cerrar', o.velCerrar, 0, L.vel, 1, (v) => (o.velCerrar = v)),
+            campoSegundos('Abrir (s)', o.tAbrir, (v) => (o.tAbrir = v), 0),
+            campoSegundos('Cerrar (s)', o.tCerrar, (v) => (o.tCerrar = v), 0),
             campoOpciones('Al activarse', ['Abre', 'Cierra'], o.invertida ? 1 : 0, (i) => (o.invertida = i === 1)),
           );
         }
         break;
       case 'boton':
-      case 'botonmalo':
+      case 'botontodos':
         filas.push(
           campoNumero('Radio', o.r, L.radioMin, L.radioMax, 5, (v) => (o.r = v)),
-          campoNumero(o.t === 'boton' ? 'Peso' : 'Víctimas', o.peso, 1, L.peso, 1, (v) => (o.peso = v)),
-          h('p', { class: 'nota' }, o.t === 'boton' ? 'Se activa mientras haya encima tantos monigotes como su peso.' : 'Mata a quien lo toca. Se activa tras cobrarse sus víctimas.'),
+          h('p', { class: 'nota' }, o.t === 'boton' ? 'Se activa mientras haya encima un jugador o una caja.' : 'Solo se activa mientras todos los jugadores están encima a la vez.'),
+        );
+        break;
+      case 'suelo':
+        filas.push(
+          campoNumero('Ancho', o.w, L.sueloMin, 2000, rejilla, (v) => (o.w = v)),
+          campoNumero('Alto', o.h, L.sueloMin, 2000, rejilla, (v) => (o.h = v)),
+          campoColor('Color', o.color, (v) => (o.color = v)),
+          h('p', { class: 'nota' }, 'Es decorativo: no afecta al juego.'),
+        );
+        break;
+      case 'caja':
+        filas.push(
+          campoNumero('Ancho', o.w, L.cajaMin, L.cajaMax, rejilla, (v) => (o.w = v)),
+          campoNumero('Alto', o.h, L.cajaMin, L.cajaMax, rejilla, (v) => (o.h = v)),
+          h('p', { class: 'nota' }, 'Se agarra desde el borde y se arrastra. Pulsa botones como un jugador.'),
+        );
+        break;
+      case 'puerta':
+        filas.push(
+          campoOpciones('Tipo', OPERACIONES.map((x) => x.toUpperCase()), OPERACIONES.indexOf(o.op), (i) => {
+            o.op = OPERACIONES[i];
+            if (o.op === 'not') o.b = null;
+          }, true),
+          h('p', { class: 'nota' }, NOTA_OPERACION[o.op]),
+        );
+        break;
+      case 'switch':
+        filas.push(
+          campoOpciones('Valor inicial', ['Apagado', 'Encendido'], o.inicial ? 1 : 0, (i) => (o.inicial = i === 1), true),
+          h('p', { class: 'nota' }, 'La primera vez que su entrada se activa cambia de valor y ya no vuelve a cambiar.'),
+        );
+        break;
+      case 'terremoto':
+        filas.push(
+          campoNumero('Intensidad (px)', o.intensidad, 1, L.intensidadMax, 1, (v) => (o.intensidad = v)),
+          campoNumero('Frecuencia (Hz)', o.frecuencia, 1, L.frecuenciaMax, 1, (v) => (o.frecuencia = v)),
+          campoOpciones('Estado inicial', ['Apagado', 'Encendido'], o.inicial ? 1 : 0, (i) => (o.inicial = i === 1), true),
+          campoOpciones('Alcance', ['Global', 'Radio de acción'], o.global ? 0 : 1, (i) => (o.global = i === 0), true),
+          !o.global && campoNumero('Radio', o.radio, L.alcanceMin, L.alcanceMax, rejilla, (v) => (o.radio = v)),
+          h('p', { class: 'nota' }, `Mientras está encendido, la cámara tiembla${o.global ? '' : ', con más fuerza cuanto más cerca de su centro esté el jugador y nada fuera del radio'}. Si está conectado, cambia de estado mientras su entrada esté activa.`),
+        );
+        break;
+      case 'delay':
+        filas.push(
+          campoSegundos('Retardo (s)', o.tiempo, (v) => (o.tiempo = v)),
+          h('p', { class: 'nota' }, 'Su salida repite lo que recibe su entrada, con el retardo indicado.'),
+        );
+        break;
+      case 'temporizador':
+        filas.push(
+          campoSegundos('Activo (s)', o.activo, (v) => (o.activo = v)),
+          campoSegundos('Inactivo (s)', o.inactivo, (v) => (o.inactivo = v)),
+          h('p', { class: 'nota' }, 'Alterna entre inactivo y activo durante los segundos indicados. Empieza a contar cuando el jugador se mueve.'),
         );
         break;
       case 'interruptor':
@@ -265,30 +431,61 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
           h('p', { class: 'nota' }, 'Cambia de estado cada vez que alguien lo pisa.'),
         );
         break;
-      case 'placa':
+      case 'movil': {
+        const m = o;
+        const anadir = () => {
+          if (m.ruta.length >= L.puntosMax) return aviso(`Una ruta admite como máximo ${L.puntosMax + 1} puntos`);
+          const ultimo = m.ruta[m.ruta.length - 1] ?? { x: 0, y: 0 };
+          m.ruta.push({ x: ultimo.x + 100, y: ultimo.y });
+          cambio(true);
+          pintarInspector();
+        };
+        const quitar = () => {
+          m.ruta.pop();
+          cambio(true);
+          pintarInspector();
+        };
+        const ascensor = m.por != null && m.ascensor;
         filas.push(
-          campoNumero('Lado', o.lado, L.ladoMin, L.ladoMax, 5, (v) => (o.lado = v)),
-          h('p', { class: 'nota' }, 'Las placas se activan cuando todas están del mismo color: negro si las pisó el jugador, blanco si fue una grabación.'),
+          campoNumero('Ancho', m.w, L.sueloMin, 2000, rejilla, (v) => (m.w = v)),
+          campoNumero('Alto', m.h, L.sueloMin, 2000, rejilla, (v) => (m.h = v)),
+          campoNumero('Velocidad (px/s)', m.vel, 1, L.velMovilMax, 10, (v) => (m.vel = v)),
+          !ascensor && campoOpciones('Recorrido', ['Ida y vuelta', 'Bucle', 'Una vez'], MODOS_MOVIL.indexOf(m.modo), (i) => (m.modo = MODOS_MOVIL[i]), true),
+          campoOpciones('Estado inicial', ['Desactivada', 'Activada'], m.inicial ? 1 : 0, (i) => (m.inicial = i === 1), true),
+          m.por != null && campoOpciones('Con señal', ['Mientras esté activa', 'Ascensor'], m.ascensor ? 1 : 0, (i) => (m.ascensor = i === 1), true),
+          !ascensor && campoOpciones('Al desactivarse', ['Se para', 'Vuelve atrás'], m.atras ? 1 : 0, (i) => (m.atras = i === 1), true),
+          !ascensor && m.atras && campoNumero('Vel. atrás (px/s)', m.velAtras, 1, L.velMovilMax, 10, (v) => (m.velAtras = v)),
+          h('p', { class: 'nota' }, `Ruta de ${m.ruta.length + 1} puntos. Arrastra los puntos numerados para cambiarla y toca un «+» para insertar uno en medio.`),
+          h('div', { class: 'fila' },
+            h('button', { class: 'btn', onclick: anadir }, icono('mas'), 'Añadir punto'),
+            m.ruta.length ? h('button', { class: 'btn', onclick: quitar }, 'Quitar último') : false,
+          ),
+          h('p', { class: 'nota' }, ascensor
+            ? 'Con la señal activa avanza hasta el último punto; sin ella vuelve al primero.'
+            : 'Invisible en la partida. Lleva consigo todo lo que toca su rectángulo, y a los jugadores y cajas que estén dentro.'),
         );
         break;
-      case 'laser':
+      }
+      case 'pinchos':
         filas.push(
-          campoOpciones('Dirección', FLECHAS, o.dir, (i) => (o.dir = i)),
-          campoOpciones('Color', ['Negro', 'Blanco'], o.blanco ? 1 : 0, (i) => (o.blanco = i === 1)),
-          h('p', { class: 'nota' }, 'El láser negro mata a las grabaciones; el blanco, al jugador. Un activador le cambia el color.'),
+          campoNumero('Ancho', o.w, L.sueloMin, 2000, rejilla, (v) => (o.w = v)),
+          campoNumero('Alto', o.h, L.sueloMin, 2000, rejilla, (v) => (o.h = v)),
+          campoOpciones('Estado inicial', ['Apagados', 'Encendidos'], o.inicial ? 1 : 0, (i) => (o.inicial = i === 1), true),
+          h('p', { class: 'nota' }, 'Cuenta como suelo. Encendidos matan a quien los pise. Si están conectados, cambian de estado mientras su entrada esté activa.'),
         );
         break;
-      case 'portal':
+      case 'control':
         filas.push(
-          campoNumero('Radio', o.r, L.radioMin, L.radioMax, 5, (v) => (o.r = v)),
-          h('p', { class: 'nota' }, 'Arrastra cada extremo por separado.'),
+          campoNumero('Ancho', o.w, L.sueloMin, 2000, rejilla, (v) => (o.w = v)),
+          campoNumero('Alto', o.h, L.sueloMin, 2000, rejilla, (v) => (o.h = v)),
+          h('p', { class: 'nota' }, 'Cuando un jugador lo pisa, pasa a ser el punto de reaparición de todos los que caigan al vacío.'),
         );
         break;
       case 'meta':
         filas.push(
           campoNumero('Ancho', o.w, L.metaMin, L.metaMax, rejilla, (v) => (o.w = v)),
           campoNumero('Alto', o.h, L.metaMin, L.metaMax, rejilla, (v) => (o.h = v)),
-          campoNumero('Monigotes', o.n, 1, L.peso, 1, (v) => (o.n = v)),
+          h('p', { class: 'nota' }, 'El nivel se completa cuando todos los jugadores han entrado en una meta.'),
         );
         break;
       case 'texto': {
@@ -302,20 +499,27 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
       }
     }
 
-    if (esReceptor(o)) {
-      const a = obj(o.por);
+    if ('invisible' in o) {
+      filas.push(campoOpciones('En la partida', ['Visible', 'Invisible'], o.invisible ? 1 : 0, (i) => (o.invisible = i === 1), true));
+    }
+
+    const entradas = ranuras(o);
+    for (const r of entradas) {
+      const a = obj(ref(o, r));
+      const etiqueta = entradas.length > 1 ? NOMBRE_RANURA[r] : 'Entrada';
       filas.push(
-        a ? h('p', { class: 'nota enlace' }, `Conectado a ${nombreDe(a)}`) : false,
+        h('p', { class: 'nota enlace' }, `${etiqueta}: ${a ? nombreDe(a) : 'sin conectar'}`),
         h('div', { class: 'fila' },
-          h('button', { class: 'btn', onclick: () => empezarConexion(o.id) }, icono('conexiones'), a ? 'Cambiar' : 'Conectar'),
-          a ? h('button', { class: 'btn', onclick: () => { o.por = null; cambio(true); pintarInspector(); } }, 'Desconectar') : false,
+          h('button', { class: 'btn', onclick: () => empezarConexion(o.id, r) }, icono('conexiones'), a ? 'Cambiar' : 'Conectar'),
+          a ? h('button', { class: 'btn', onclick: () => { fijarRef(o, r, null); cambio(true); pintarInspector(); } }, 'Desconectar') : false,
         ),
       );
-    } else if (esActivador(o)) {
-      const n = nivel.objetos.filter((x) => esReceptor(x) && x.por === o.id).length;
+    }
+    if (esActivador(o)) {
+      const n = nivel.objetos.reduce((t, x) => t + ranuras(x).filter((r) => ref(x, r) === o.id).length, 0);
       filas.push(
-        h('p', { class: 'nota enlace' }, n ? `Controla ${n} ${n === 1 ? 'objeto' : 'objetos'}` : 'Sin conectar'),
-        h('button', { class: 'btn', onclick: () => empezarConexion(o.id) }, icono('conexiones'), 'Conectar con…'),
+        h('p', { class: 'nota enlace' }, `Salida: ${n ? `controla ${n} ${n === 1 ? 'entrada' : 'entradas'}` : 'sin conectar'}`),
+        h('button', { class: 'btn', onclick: () => empezarConexion(o.id, null) }, icono('conexiones'), 'Conectar con…'),
       );
     }
     filas.push(
@@ -327,42 +531,72 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
     inspector.replaceChildren(...(filas.filter(Boolean) as HTMLElement[]));
   }
 
-  function empezarConexion(id: number) {
-    conectando = id;
+  function empezarConexion(id: number, ranura: Ranura | null) {
+    conectando = { id, ranura };
     herramienta = null;
+    mapa = false;
     pintarPaleta();
     pintarInspector();
   }
 
-  function conectarCon(destino: Objeto | null) {
-    const origen = obj(conectando);
+  function conectarCon(destino: Objeto | null, ranuraDestino: Ranura | null = null) {
+    const c = conectando;
+    const origen = obj(c?.id ?? null);
     conectando = null;
     pintarInspector();
-    if (!origen || !destino || origen === destino) return;
-    if (esActivador(origen) && esReceptor(destino)) destino.por = origen.id;
-    else if (esReceptor(origen) && esActivador(destino)) origen.por = destino.id;
-    else return aviso('Conecta un botón, interruptor o placa con una pared o un láser');
+    if (!c || !origen || !destino || origen === destino) return;
+    if (c.ranura) {
+      if (!esActivador(destino)) return aviso('La señal tiene que salir de un botón, interruptor, puerta lógica, switch, temporizador o delay');
+      fijarRef(origen, c.ranura, destino.id);
+    } else {
+      const libres = ranuras(destino);
+      if (!libres.length) return aviso('La señal solo puede ir a una pared, unos pinchos, una puerta lógica, un switch, un delay, un terremoto o una plataforma móvil');
+      fijarRef(destino, ranuraDestino ?? libres.find((r) => ref(destino, r) == null) ?? libres[0], origen.id);
+    }
     cambio(true);
     pintarInspector();
+  }
+
+  function pinEn(x: number, y: number): { o: Objeto; ranura: Ranura | null } | null {
+    const alcance = Math.max(9, 12 / vista.escala);
+    const cerca = (p: { x: number; y: number }) => Math.hypot(p.x - x, p.y - y) < alcance;
+    for (let i = nivel.objetos.length - 1; i >= 0; i--) {
+      const o = nivel.objetos[i];
+      if (o.t !== 'puerta' && o.t !== 'switch' && o.t !== 'temporizador' && o.t !== 'delay' && o.t !== 'terremoto') continue;
+      if (o.t !== 'terremoto' && cerca(pinSalida(o))) return { o, ranura: null };
+      for (const r of ranuras(o)) if (cerca(pinEntrada(o, r))) return { o, ranura: r };
+    }
+    return null;
   }
 
   function eliminar() {
     const o = obj(sel);
     if (!o) return;
     nivel.objetos = nivel.objetos.filter((x) => x !== o);
-    for (const x of nivel.objetos) if (esReceptor(x) && x.por === o.id) x.por = null;
+    for (const x of nivel.objetos) for (const r of ranuras(x)) if (ref(x, r) === o.id) fijarRef(x, r, null);
     sel = null;
     cambio(true);
     pintarInspector();
   }
 
   function duplicar() {
-    const o = obj(sel);
-    if (!o || !hayHueco()) return;
-    const copia = { ...o, id: siguienteId(nivel), x: o.x + 25, y: o.y + 25 } as Objeto;
-    if (copia.t === 'portal') (copia.x2 += 25), (copia.y2 += 25);
-    nivel.objetos.push(copia);
-    sel = copia.id;
+    const originales = (grupo.length ? grupo : typeof sel === 'number' ? [sel] : []).map(obj).filter((o): o is Objeto => !!o);
+    if (!originales.length) return;
+    if (nivel.objetos.length + originales.length > LIMITES.objetos) return void aviso(`Un nivel admite como máximo ${LIMITES.objetos} objetos`);
+    let id = siguienteId(nivel);
+    const nuevos = new Map(originales.map((o) => [o.id, id++]));
+    const copias = originales.map((o) => {
+      const copia = { ...JSON.parse(JSON.stringify(o)), id: nuevos.get(o.id)!, x: o.x + 25, y: o.y + 25 } as Objeto;
+      for (const r of ranuras(copia)) {
+        const v = ref(copia, r);
+        if (v != null && nuevos.has(v)) fijarRef(copia, r, nuevos.get(v)!);
+      }
+      return copia;
+    });
+    nivel.objetos.push(...copias);
+    grupo = copias.map((c) => c.id);
+    sel = null;
+    normalizarGrupo();
     cambio(true);
     pintarInspector();
   }
@@ -386,20 +620,22 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
       case 'pared':
       case 'paredmala':
       case 'meta':
+      case 'suelo':
+      case 'caja':
+      case 'control':
+      case 'pinchos':
+      case 'movil':
         return { x: o.x, y: o.y, w: o.w, h: o.h };
       case 'boton':
-      case 'botonmalo':
+      case 'botontodos':
       case 'interruptor':
         return { x: o.x - o.r, y: o.y - o.r, w: o.r * 2, h: o.r * 2 };
-      case 'placa':
-        return { x: o.x, y: o.y, w: o.lado, h: o.lado };
-      case 'laser':
-        return cajaLaser(o);
-      case 'portal': {
-        const x = Math.min(o.x, o.x2) - o.r;
-        const y = Math.min(o.y, o.y2) - o.r;
-        return { x, y, w: Math.abs(o.x - o.x2) + o.r * 2, h: Math.abs(o.y - o.y2) + o.r * 2 };
-      }
+      case 'puerta':
+      case 'switch':
+      case 'temporizador':
+      case 'delay':
+      case 'terremoto':
+        return { x: o.x - TAM_LOGICA / 2, y: o.y - TAM_LOGICA / 2, w: TAM_LOGICA, h: TAM_LOGICA };
       case 'texto':
         return { x: o.x - 3, y: o.y - 3, w: anchoTexto(o.texto) + 6, h: 22 };
     }
@@ -407,12 +643,14 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
 
   function toca(o: Objeto, x: number, y: number): 0 | 1 | 2 {
     const m = Math.min(12, 6 / vista.escala);
-    if (o.t === 'boton' || o.t === 'botonmalo' || o.t === 'interruptor') return Math.hypot(x - o.x, y - o.y) < o.r + m ? 1 : 0;
-    if (o.t === 'portal') {
-      if (Math.hypot(x - o.x, y - o.y) < o.r + m) return 1;
-      return Math.hypot(x - o.x2, y - o.y2) < o.r + m ? 2 : 0;
-    }
+    if (o.t === 'boton' || o.t === 'botontodos' || o.t === 'interruptor') return Math.hypot(x - o.x, y - o.y) < o.r + m ? 1 : 0;
     const c = caja(o);
+    if (o.t === 'movil') {
+      const b = Math.min(BORDE_MOVIL, c.w / 2, c.h / 2);
+      const fuera = x > c.x - m && x < c.x + c.w + m && y > c.y - m && y < c.y + c.h + m;
+      const dentro = x > c.x + b && x < c.x + c.w - b && y > c.y + b && y < c.y + c.h - b;
+      return fuera && !dentro ? 1 : 0;
+    }
     return x > c.x - m && x < c.x + c.w + m && y > c.y - m && y < c.y + c.h + m ? 1 : 0;
   }
 
@@ -429,9 +667,8 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
   }
 
   function asas(o: Objeto): Asa[] {
-    if (o.t === 'pared' || o.t === 'paredmala' || o.t === 'meta') {
-      const min = o.t === 'meta' ? LIMITES.metaMin : LIMITES.paredMin;
-      const max = o.t === 'meta' ? LIMITES.metaMax : 2000;
+    if ('w' in o) {
+      const [min, max] = limitesRect(o.t);
       const lista: Asa[] = [];
       for (const ky of [0, 0.5, 1]) {
         for (const kx of [0, 0.5, 1]) {
@@ -450,53 +687,163 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
           });
         }
       }
+      if (o.t === 'movil') lista.push(...asasRuta(o));
       return lista;
     }
-    if (o.t === 'boton' || o.t === 'botonmalo' || o.t === 'interruptor' || o.t === 'portal') {
+    if (o.t === 'boton' || o.t === 'botontodos' || o.t === 'interruptor') {
       return [{
         x: o.x + o.r,
         y: o.y,
         mover: (p: typeof o, x, y) => (p.r = limitar(Math.round(Math.hypot(x - p.x, y - p.y) / 5) * 5, LIMITES.radioMin, LIMITES.radioMax)),
       }];
     }
-    if (o.t === 'placa') {
-      return [{
-        x: o.x + o.lado,
-        y: o.y + o.lado,
-        mover: (p: typeof o, x, y) => (p.lado = limitar(Math.max(x - p.x, y - p.y), LIMITES.ladoMin, LIMITES.ladoMax)),
-      }];
-    }
     return [];
   }
 
+  function asasRuta(o: MovilDef): Asa[] {
+    return o.ruta.map((p, i) => ({
+      x: o.x + o.w / 2 + p.x,
+      y: o.y + o.h / 2 + p.y,
+      mover(m: MovilDef, x: number, y: number) {
+        m.ruta[i] = {
+          x: Math.round((x - m.x - m.w / 2) / rejilla) * rejilla,
+          y: Math.round((y - m.y - m.h / 2) / rejilla) * rejilla,
+        };
+      },
+    }));
+  }
+
+  function huecosRuta(o: MovilDef): { i: number; x: number; y: number }[] {
+    const cx = o.x + o.w / 2;
+    const cy = o.y + o.h / 2;
+    const puntos = [{ x: 0, y: 0 }, ...o.ruta];
+    if (o.modo === 'bucle' && !(o.por != null && o.ascensor) && o.ruta.length) puntos.push({ x: 0, y: 0 });
+    const res: { i: number; x: number; y: number }[] = [];
+    for (let k = 1; k < puntos.length; k++) {
+      res.push({ i: k - 1, x: cx + (puntos[k - 1].x + puntos[k].x) / 2, y: cy + (puntos[k - 1].y + puntos[k].y) / 2 });
+    }
+    return res;
+  }
+
+  function insertarPunto(o: MovilDef, x: number, y: number): number | null {
+    const alcance = 12 / vista.escala;
+    const hueco = huecosRuta(o).find((q) => Math.hypot(q.x - x, q.y - y) < alcance);
+    if (!hueco) return null;
+    if (o.ruta.length >= LIMITES.puntosMax) {
+      aviso(`Una ruta admite como máximo ${LIMITES.puntosMax + 1} puntos`);
+      return null;
+    }
+    o.ruta.splice(hueco.i, 0, {
+      x: Math.round((hueco.x - o.x - o.w / 2) / rejilla) * rejilla,
+      y: Math.round((hueco.y - o.y - o.h / 2) / rejilla) * rejilla,
+    });
+    return hueco.i;
+  }
+
+  function dibujarRuta(ctx: CanvasRenderingContext2D, o: MovilDef, px: number) {
+    const cx = o.x + o.w / 2;
+    const cy = o.y + o.h / 2;
+    const puntos = [{ x: 0, y: 0 }, ...o.ruta];
+    if (o.modo === 'bucle' && !(o.por != null && o.ascensor) && o.ruta.length) puntos.push({ x: 0, y: 0 });
+    ctx.strokeStyle = C.azul;
+    ctx.lineWidth = 2 * px;
+    ctx.beginPath();
+    puntos.forEach((p, i) => (i ? ctx.lineTo(cx + p.x, cy + p.y) : ctx.moveTo(cx + p.x, cy + p.y)));
+    ctx.stroke();
+    ctx.lineWidth = 1 * px;
+    ctx.setLineDash([4 * px, 4 * px]);
+    for (const p of o.ruta) ctx.strokeRect(o.x + p.x, o.y + p.y, o.w, o.h);
+    ctx.setLineDash([]);
+    ctx.font = `700 ${12 * px}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    [{ x: 0, y: 0 }, ...o.ruta].forEach((p, i) => {
+      ctx.fillStyle = C.azul;
+      ctx.beginPath();
+      ctx.arc(cx + p.x, cy + p.y, 10 * px, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = C.blanco;
+      ctx.fillText(String(i + 1), cx + p.x, cy + p.y + px);
+    });
+    for (const q of huecosRuta(o)) {
+      ctx.fillStyle = C.blanco;
+      ctx.strokeStyle = C.azul;
+      ctx.lineWidth = 2 * px;
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, 7 * px, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(q.x - 3.5 * px, q.y);
+      ctx.lineTo(q.x + 3.5 * px, q.y);
+      ctx.moveTo(q.x, q.y - 3.5 * px);
+      ctx.lineTo(q.x, q.y + 3.5 * px);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = C.verde;
+    ctx.lineWidth = 2 * px;
+    ctx.setLineDash([3 * px, 3 * px]);
+    for (const m of miembrosMoviles(nivel).get(o.id) ?? []) for (const z of zonasObjeto(m)) ctx.strokeRect(z.x - 2, z.y - 2, z.w + 4, z.h + 4);
+    ctx.setLineDash([]);
+    ctx.strokeStyle = C.azul;
+    ctx.lineWidth = 1.5 * px;
+  }
+
+  function asasInicio(): Asa[] {
+    const r = nivel.inicio;
+    const min = LIMITES.inicioMin;
+    const lista: Asa[] = [];
+    for (const ky of [0, 0.5, 1]) {
+      for (const kx of [0, 0.5, 1]) {
+        if (kx === 0.5 && ky === 0.5) continue;
+        lista.push({
+          x: r.x + r.w * kx,
+          y: r.y + r.h * ky,
+          mover(p: typeof r, x, y) {
+            const der = p.x + p.w;
+            const inf = p.y + p.h;
+            if (kx === 0) (p.w = limitar(der - x, min, 2000)), (p.x = der - p.w);
+            if (kx === 1) p.w = limitar(x - p.x, min, 2000);
+            if (ky === 0) (p.h = limitar(inf - y, min, 2000)), (p.y = inf - p.h);
+            if (ky === 1) p.h = limitar(y - p.y, min, 2000);
+          },
+        });
+      }
+    }
+    return lista;
+  }
+
   function alPulsar(e: PointerEvent) {
+    if (e.button === 2 || (mapa && e.button === 0)) {
+      canvas.setPointerCapture(e.pointerId);
+      pan = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      return;
+    }
     if (e.button > 0) return;
     canvas.setPointerCapture(e.pointerId);
     const p = vista.aMundo(e.clientX, e.clientY);
     puntero = p;
     movido = false;
 
-    if (conectando != null) {
-      conectarCon(objetoEn(p.x, p.y)?.o ?? null);
+    if (conectando) {
+      const pin = pinEn(p.x, p.y);
+      conectarCon(pin?.o ?? objetoEn(p.x, p.y)?.o ?? null, pin?.ranura ?? null);
       return;
     }
 
     if (herramienta) {
       if (!hayHueco()) return;
       const t = herramienta;
-      const x = limitar(ajustar(p.x), 0, ANCHO);
-      const y = limitar(ajustar(p.y), 0, ALTO);
+      const x = limitar(ajustar(p.x), -LIMITES.coord, LIMITES.coord);
+      const y = limitar(ajustar(p.y), -LIMITES.coord, LIMITES.coord);
       const o = crear(t, siguienteId(nivel), x, y);
       nivel.objetos.push(o);
       sel = o.id;
+      grupo = [];
       herramienta = null;
-      if (o.t === 'pared' || o.t === 'paredmala' || o.t === 'meta') arrastre = { tipo: 'crear', id: o.id, ox: x, oy: y };
+      if ('w' in o) arrastre = { tipo: 'crear', id: o.id, ox: x, oy: y };
       else {
-        if (o.t === 'placa') (o.x -= 25), (o.y -= 25);
-        if (o.t === 'laser') (o.x -= 20), (o.y -= 15);
-        if (o.t === 'portal') o.x2 = limitar(o.x + 150, 0, ANCHO);
-        arrastre = { tipo: 'mover', id: o.id, dx: p.x - o.x, dy: p.y - o.y, extremo: o.t === 'portal' ? 2 : 1 };
-        if (o.t === 'portal') (arrastre.dx = p.x - o.x2), (arrastre.dy = p.y - o.y2);
+        arrastre = { tipo: 'mover', id: o.id, dx: p.x - o.x, dy: p.y - o.y, extremo: 1 };
       }
       movido = true;
       cambio(false);
@@ -505,50 +852,108 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
       return;
     }
 
+    const pin = pinEn(p.x, p.y);
+    if (pin) {
+      sel = pin.o.id;
+      grupo = [];
+      empezarConexion(pin.o.id, pin.ranura);
+      return;
+    }
+
     const actual = obj(sel);
-    if (actual) {
+    if (actual?.t === 'movil') {
+      const i = insertarPunto(actual, p.x, p.y);
+      if (i != null) {
+        arrastre = { tipo: 'asa', id: actual.id, i: asas(actual).length - actual.ruta.length + i };
+        movido = true;
+        cambio(false);
+        pintarInspector();
+        return;
+      }
+    }
+    if (actual || sel === 'inicio') {
       const alcance = 14 / vista.escala;
-      const i = asas(actual).findIndex((a) => Math.hypot(a.x - p.x, a.y - p.y) < alcance);
+      const i = (actual ? asas(actual) : asasInicio()).findIndex((a) => Math.hypot(a.x - p.x, a.y - p.y) < alcance);
       if (i >= 0) {
-        arrastre = { tipo: 'asa', id: actual.id, i };
+        arrastre = { tipo: 'asa', id: actual ? actual.id : 'inicio', i };
         return;
       }
     }
     const tocado = objetoEn(p.x, p.y);
-    const enInicio = Math.hypot(p.x - nivel.inicio.x, p.y - nivel.inicio.y) < 24;
-    if (enInicio && (!tocado || tocado.o.t === 'pared' || tocado.o.t === 'meta' || tocado.o.t === 'paredmala')) {
+    if (e.ctrlKey || e.metaKey) {
+      if (tocado) alternarGrupo(tocado.o.id);
+      pintarInspector();
+      return;
+    }
+    if (tocado && grupo.includes(tocado.o.id)) {
+      const orig = new Map<number, number[]>();
+      for (const id of grupo) {
+        const o = obj(id);
+        if (o) orig.set(id, [o.x, o.y]);
+      }
+      arrastre = { tipo: 'grupo', x: p.x, y: p.y, orig };
+      return;
+    }
+    grupo = [];
+    const ini = nivel.inicio;
+    const enInicio = p.x > ini.x && p.x < ini.x + ini.w && p.y > ini.y && p.y < ini.y + ini.h;
+    if (enInicio && (!tocado || tocado.o.t === 'suelo' || tocado.o.t === 'control')) {
       sel = 'inicio';
       arrastre = { tipo: 'mover', id: 'inicio', dx: p.x - nivel.inicio.x, dy: p.y - nivel.inicio.y, extremo: 1 };
     } else if (tocado) {
       const o = tocado.o;
       sel = o.id;
-      const bx = tocado.extremo === 2 && o.t === 'portal' ? o.x2 : o.x;
-      const by = tocado.extremo === 2 && o.t === 'portal' ? o.y2 : o.y;
-      arrastre = { tipo: 'mover', id: o.id, dx: p.x - bx, dy: p.y - by, extremo: o.t === 'portal' ? tocado.extremo : 0 };
-    } else sel = null;
+      arrastre = { tipo: 'mover', id: o.id, dx: p.x - o.x, dy: p.y - o.y, extremo: 0 };
+    } else {
+      sel = null;
+      pan = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    }
     pintarInspector();
   }
 
+  function desplazar(dx: number, dy: number) {
+    vista.cx = limitar(vista.cx + dx, -LIMITES.coord, LIMITES.coord - ANCHO);
+    vista.cy = limitar(vista.cy + dy, -LIMITES.coord, LIMITES.coord - ALTO);
+  }
+
+  function alRueda(e: WheelEvent) {
+    e.preventDefault();
+    const k = (e.deltaMode === 1 ? 16 : 1) / vista.escala;
+    if (e.shiftKey && !e.deltaX) desplazar(e.deltaY * k, 0);
+    else desplazar(e.deltaX * k, e.deltaY * k);
+  }
+
   function alMover(e: PointerEvent) {
+    if (pan && e.pointerId === pan.id) {
+      desplazar(-(e.clientX - pan.x) / vista.escala, -(e.clientY - pan.y) / vista.escala);
+      pan.x = e.clientX;
+      pan.y = e.clientY;
+    }
     const p = vista.aMundo(e.clientX, e.clientY);
     puntero = p;
     if (!arrastre) return;
     const a = arrastre;
     if (a.tipo === 'mover') {
-      const x = limitar(ajustar(p.x - a.dx), -200, ANCHO + 200);
-      const y = limitar(ajustar(p.y - a.dy), -200, ALTO + 200);
+      const x = limitar(ajustar(p.x - a.dx), -LIMITES.coord, LIMITES.coord);
+      const y = limitar(ajustar(p.y - a.dy), -LIMITES.coord, LIMITES.coord);
       if (a.id === 'inicio') {
-        nivel.inicio = { x: limitar(x, 0, ANCHO), y: limitar(y, 0, ALTO) };
+        (nivel.inicio.x = x), (nivel.inicio.y = y);
       } else {
         const o = obj(a.id);
         if (!o) return;
-        if (o.t === 'portal' && a.extremo === 2) (o.x2 = x), (o.y2 = y);
-        else if (o.t === 'portal' && a.extremo === 0) {
-          const dx = x - o.x;
-          const dy = y - o.y;
-          (o.x = x), (o.y = y), (o.x2 += dx), (o.y2 += dy);
-        } else (o.x = x), (o.y = y);
+        (o.x = x), (o.y = y);
       }
+    } else if (a.tipo === 'grupo') {
+      const dx = ajustar(p.x - a.x);
+      const dy = ajustar(p.y - a.y);
+      const L = LIMITES.coord;
+      for (const [id, v] of a.orig) {
+        const o = obj(id);
+        if (!o) continue;
+        (o.x = limitar(v[0] + dx, -L, L)), (o.y = limitar(v[1] + dy, -L, L));
+      }
+    } else if (a.tipo === 'asa' && a.id === 'inicio') {
+      asasInicio()[a.i]?.mover(nivel.inicio, ajustar(p.x), ajustar(p.y));
     } else if (a.tipo === 'asa') {
       const o = obj(a.id);
       if (!o) return;
@@ -558,8 +963,7 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
       if (!o) return;
       const x = ajustar(p.x);
       const y = ajustar(p.y);
-      const min = o.t === 'meta' ? LIMITES.metaMin : LIMITES.paredMin;
-      const max = o.t === 'meta' ? LIMITES.metaMax : 2000;
+      const [min, max] = limitesRect(o.t);
       if (Math.abs(x - a.ox) < 10 && Math.abs(y - a.oy) < 10) return;
       o.w = limitar(Math.abs(x - a.ox), min, max);
       o.h = limitar(Math.abs(y - a.oy), min, max);
@@ -573,6 +977,7 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
   }
 
   function alSoltar() {
+    pan = null;
     if (!arrastre) return;
     const a = arrastre;
     arrastre = null;
@@ -590,6 +995,8 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
   canvas.addEventListener('pointermove', alMover);
   canvas.addEventListener('pointerup', alSoltar);
   canvas.addEventListener('pointercancel', alSoltar);
+  canvas.addEventListener('wheel', alRueda, { passive: false });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
   function dibujar(ahora: number) {
     if (!vivo) return;
@@ -601,21 +1008,35 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
 
     if (rejilla >= 25) {
       ctx.fillStyle = '#d8d8d8';
-      for (let x = rejilla; x < ANCHO; x += rejilla) for (let y = rejilla; y < ALTO; y += rejilla) ctx.fillRect(x - px, y - px, 2 * px, 2 * px);
+      const v = vista.visible();
+      const gx = Math.ceil(v.x / rejilla) * rejilla;
+      const gy = Math.ceil(v.y / rejilla) * rejilla;
+      for (let x = gx; x <= v.x + v.w; x += rejilla) for (let y = gy; y <= v.y + v.h; y += rejilla) ctx.fillRect(x - px, y - px, 2 * px, 2 * px);
     }
-    dibujarNivel(ctx, sim, { conexiones: true, tiempo: ahora });
+    dibujarNivel(ctx, sim, { conexiones: true, tiempo: ahora, editor: true });
 
     ctx.strokeStyle = C.azul;
     ctx.lineWidth = 1.5 * px;
     if (sel === 'inicio') {
       ctx.setLineDash([5 * px, 4 * px]);
-      ctx.beginPath();
-      ctx.arc(nivel.inicio.x, nivel.inicio.y, 26, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.strokeRect(nivel.inicio.x - 3, nivel.inicio.y - 3, nivel.inicio.w + 6, nivel.inicio.h + 6);
       ctx.setLineDash([]);
+      const t = 5 * px;
+      for (const a of asasInicio()) {
+        ctx.fillStyle = C.blanco;
+        ctx.fillRect(a.x - t, a.y - t, t * 2, t * 2);
+        ctx.strokeRect(a.x - t, a.y - t, t * 2, t * 2);
+      }
     }
     const o = obj(sel);
     if (o) {
+      if (o.t === 'terremoto' && !o.global) {
+        ctx.setLineDash([8 * px, 6 * px]);
+        ctx.beginPath();
+        ctx.arc(o.x, o.y, o.radio, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       const c = caja(o);
       ctx.setLineDash([5 * px, 4 * px]);
       ctx.strokeRect(c.x - 3, c.y - 3, c.w + 6, c.h + 6);
@@ -626,14 +1047,24 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
         ctx.fillRect(a.x - t, a.y - t, t * 2, t * 2);
         ctx.strokeRect(a.x - t, a.y - t, t * 2, t * 2);
       }
+      if (o.t === 'movil') dibujarRuta(ctx, o, px);
     }
 
-    const origen = obj(conectando);
-    if (origen) {
-      const c = caja(origen);
+    for (const id of grupo) {
+      const g = obj(id);
+      if (!g) continue;
+      const c = caja(g);
+      ctx.setLineDash([5 * px, 4 * px]);
+      ctx.strokeRect(c.x - 3, c.y - 3, c.w + 6, c.h + 6);
+      ctx.setLineDash([]);
+    }
+
+    const origen = obj(conectando?.id ?? null);
+    if (origen && conectando) {
+      const c = conectando.ranura ? pinEntrada(origen, conectando.ranura) : pinSalida(origen);
       ctx.setLineDash([5 * px, 4 * px]);
       ctx.beginPath();
-      ctx.moveTo(c.x + c.w / 2, c.y + c.h / 2);
+      ctx.moveTo(c.x, c.y);
       ctx.lineTo(puntero.x, puntero.y);
       ctx.stroke();
       ctx.setLineDash([]);
@@ -641,16 +1072,18 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
     vista.terminar();
 
     let t = 'Toca un objeto para seleccionarlo y arrástralo para moverlo';
-    if (conectando != null) t = origen && esActivador(origen) ? 'Toca la pared o el láser que debe controlar' : 'Toca el botón, interruptor o placa que lo controla';
-    else if (herramienta === 'pared' || herramienta === 'paredmala' || herramienta === 'meta') t = `${NOMBRES_TIPO[herramienta]}: arrastra sobre el nivel para dibujarla`;
+    if (mapa) t = 'Arrastra para mover el mapa';
+    else if (conectando) t = conectando.ranura ? 'Toca el botón, interruptor, puerta lógica, switch, temporizador o delay que da la señal' : 'Toca la pared, los pinchos, la puerta lógica, el switch, el delay, el terremoto o la plataforma móvil que recibe la señal';
+    else if (herramienta && 'w' in crear(herramienta, 0, 0, 0)) t = `${NOMBRES_TIPO[herramienta]}: arrastra sobre el nivel para dibujar`;
     else if (herramienta) t = `${NOMBRES_TIPO[herramienta]}: toca el nivel para colocarlo`;
     else if (!nivel.objetos.length) t = 'Elige un objeto de la izquierda y colócalo en el nivel';
+    else if (grupo.length) t = 'Arrastra para mover la selección · Ctrl+D para duplicarla';
     else if (o) t = 'Arrastra los cuadrados para cambiar el tamaño · edita sus propiedades en el panel';
     if (pista.textContent !== t) pista.textContent = t;
 
     if (o || sel === 'inicio') {
-      const x = o ? caja(o).x + caja(o).w / 2 : nivel.inicio.x;
-      inspector.classList.toggle('izq', x > ANCHO * 0.6);
+      const x = o ? caja(o).x + caja(o).w / 2 : nivel.inicio.x + nivel.inicio.w / 2;
+      inspector.classList.toggle('izq', x - vista.cx > ANCHO * 0.6);
     }
   }
   requestAnimationFrame(dibujar);
@@ -658,13 +1091,9 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
   function abrirDatos(alTerminar?: () => void) {
     const nombre = h('input', { type: 'text', value: nivel.nombre, maxLength: LIMITES.nombre, placeholder: 'Nombre del nivel' });
     const autor = h('input', { type: 'text', value: nivel.autor, maxLength: LIMITES.autor, placeholder: 'Tu nombre' });
-    const ilimitadas = h('input', { type: 'checkbox', checked: nivel.grabaciones < 0 });
-    const cantidad = h('input', { type: 'number', min: '0', max: String(LIMITES.grabaciones), value: String(Math.max(0, nivel.grabaciones)), disabled: nivel.grabaciones < 0 });
-    ilimitadas.addEventListener('change', () => (cantidad.disabled = ilimitadas.checked));
     const aceptar = () => {
       nivel.nombre = nombre.value.trim();
       nivel.autor = autor.value.trim();
-      nivel.grabaciones = ilimitadas.checked ? -1 : limitar(parseInt(cantidad.value, 10) || 0, 0, LIMITES.grabaciones);
       cambio(true);
       pintarBarra();
       m.cerrar();
@@ -673,8 +1102,6 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
     const m = modal('Datos del nivel',
       h('label', { class: 'campo' }, 'Nombre', nombre),
       h('label', { class: 'campo' }, 'Autor', autor),
-      h('label', { class: 'casilla' }, ilimitadas, 'Grabaciones ilimitadas'),
-      h('label', { class: 'campo' }, 'Número máximo de grabaciones', cantidad),
       h('div', { class: 'fila fin' }, h('button', { class: 'btn primario', onclick: aceptar }, 'Aceptar')),
     );
     m.caja.addEventListener('keydown', (e) => e.key === 'Enter' && aceptar());
@@ -692,6 +1119,7 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
       }
       nivel = r.nivel;
       sel = null;
+      grupo = [];
       cambio(true);
       pintarBarra();
       pintarInspector();
@@ -747,13 +1175,15 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
       cerrarPrueba();
       cerrarPrueba = null;
       capaPrueba.hidden = true;
-    } else if (conectando != null || herramienta) {
+    } else if (conectando || herramienta || mapa) {
       conectando = null;
       herramienta = null;
+      mapa = false;
       pintarPaleta();
       pintarInspector();
-    } else if (sel != null) {
+    } else if (sel != null || grupo.length) {
       sel = null;
+      grupo = [];
       pintarInspector();
     } else op.alSalir();
   }
@@ -778,10 +1208,14 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
     if (!d) return;
     const o = obj(sel);
     const paso = e.shiftKey ? 1 : rejilla;
-    if (sel === 'inicio') (nivel.inicio.x += d[0] * paso), (nivel.inicio.y += d[1] * paso);
+    if (grupo.length) {
+      for (const g of grupo.map(obj)) {
+        if (!g) continue;
+        (g.x += d[0] * paso), (g.y += d[1] * paso);
+      }
+    } else if (sel === 'inicio') (nivel.inicio.x += d[0] * paso), (nivel.inicio.y += d[1] * paso);
     else if (o) {
       (o.x += d[0] * paso), (o.y += d[1] * paso);
-      if (o.t === 'portal') (o.x2 += d[0] * paso), (o.y2 += d[1] * paso);
     } else return;
     cambio(true);
     pintarInspector();
