@@ -4,11 +4,12 @@ import { NUM_INCLUIDOS, nivelIncluido } from '../core/builtin';
 import { codificar, decodificar, extraerCodigo } from '../core/codec';
 import { URL_COMPARTIR } from '../config';
 import { Nivel, clonar, nivelVacio } from '../core/level';
-import { PUEDE_REVOCAR, PUEDE_SALIR, alAbrirUrl, alAtras, anuncio, revocarConsentimiento, salir } from '../platform';
+import type { NativeAdFeed } from '@capacitor-community/admob';
+import { PUEDE_REVOCAR, PUEDE_SALIR, alAbrirUrl, alAtras, anuncio, crearAnunciosNativos, revocarConsentimiento, salir } from '../platform';
 import { Invitado, Receptor, extraerEnvio, extraerSala } from '../red';
 import { miniatura } from '../render';
 import {
-  LARGO_ETIQUETA, MAX_ETIQUETAS, ajustes, borrarDescargado, borrarPropio, descargados, guardarAjustes, guardarDescargado, guardarMeta, guardarPropio,
+  Ajustes, LARGO_ETIQUETA, MAX_ETIQUETAS, ajustes, borrarDescargado, borrarPropio, descargados, guardarAjustes, guardarDescargado, guardarMeta, guardarPropio,
   limpiarEtiqueta, meta, metas, nuevoId, propios, todasEtiquetas,
 } from '../store';
 import { aviso, botonIcono, confirmar, h, icono, modal, registrarIconos } from './dom';
@@ -75,7 +76,12 @@ export function menu() {
     ),
     h('p', { class: 'creditos' }, 'Un juego de Hector Galbis Sanchis.'),
   );
-  mostrar(el, null, true, fondo.parar);
+  mostrar(el, null, false, fondo.parar);
+}
+
+function aplicarTema() {
+  if (ajustes.tema === 'auto') delete document.documentElement.dataset.tema;
+  else document.documentElement.dataset.tema = ajustes.tema;
 }
 
 function abrirAjustes() {
@@ -92,6 +98,23 @@ function abrirAjustes() {
       }),
       texto,
     );
+  const temas: [Ajustes['tema'], string][] = [['auto', 'Automático'], ['claro', 'Claro'], ['oscuro', 'Oscuro']];
+  const segmentos = h('div', { class: 'segmentos ancho' });
+  const pintarTema = () =>
+    segmentos.replaceChildren(
+      ...temas.map(([t, texto]) =>
+        h('button', {
+          class: ajustes.tema === t ? 'activo' : '',
+          onclick: () => {
+            ajustes.tema = t;
+            guardarAjustes();
+            aplicarTema();
+            pintarTema();
+          },
+        }, texto),
+      ),
+    );
+  pintarTema();
   modal('Ajustes',
     casilla('Música', 'musica'),
     casilla('Efectos de sonido', 'efectos'),
@@ -107,6 +130,7 @@ function abrirAjustes() {
         },
       }),
     ),
+    h('div', { class: 'campo' }, 'Tema', segmentos),
     PUEDE_REVOCAR && h('button', { class: 'btn', onclick: revocarConsentimiento }, 'Privacidad y cookies'),
     h('a', { class: 'nota', href: `${URL_COMPARTIR.replace(/\/+$/, '')}/privacidad.html`, target: '_blank', rel: 'noopener' }, 'Política de privacidad'),
   );
@@ -155,9 +179,49 @@ function cumple(e: EntradaNivel, filtro: string): boolean {
   return true;
 }
 
+function colorHex(v: string): string {
+  const c = getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  return /^#[0-9a-f]{6}$/i.test(c) ? c : '#888888';
+}
+
 function pantallaNiveles() {
   const entradas = entradasNiveles();
-  const lista = h('div', { class: 'rejilla-tarjetas' });
+  const lista = h('div', { class: 'rejilla-tarjetas filas' });
+  let anuncios: NativeAdFeed | null = null;
+  let vivo = true;
+  let huecos: HTMLElement[] = [];
+  const conAnuncios = __OBJETIVO__ === 'android';
+  const enlazarHuecos = () => {
+    if (!anuncios) return;
+    huecos.forEach((el) => anuncios!.attach(el.dataset.clave!, el));
+  };
+  const vigiaModales = new MutationObserver(() => {
+    if (!anuncios) return;
+    if (document.querySelector('.modal')) void anuncios.pause().catch(() => undefined);
+    else anuncios.resume();
+  });
+  if (conAnuncios) {
+    vigiaModales.observe(document.body, { childList: true });
+    void crearAnunciosNativos('niveles', {
+      fondo: colorHex('--papel'),
+      borde: colorHex('--tinta'),
+      texto: colorHex('--tinta'),
+      suave: colorHex('--suave'),
+      boton: colorHex('--tinta'),
+      textoBoton: colorHex('--papel'),
+    }).then((f) => {
+      if (!vivo) return void f?.destroy();
+      anuncios = f;
+      enlazarHuecos();
+      if (document.querySelector('.modal')) void anuncios?.pause().catch(() => undefined);
+    });
+  }
+  const limpiar = () => {
+    vivo = false;
+    vigiaModales.disconnect();
+    void anuncios?.destroy();
+    anuncios = null;
+  };
   const filtros = h('div', { class: 'filtros-lista' });
   const buscar = h('input', { type: 'search', placeholder: 'Buscar por nombre', value: vista.busqueda, autocomplete: 'off', spellcheck: false });
   buscar.addEventListener('input', () => {
@@ -212,7 +276,20 @@ function pantallaNiveles() {
         : vista.orden === 'autor' ? (a.nivel.autor || '').localeCompare(b.nivel.autor || '', 'es') || nombre(a).localeCompare(nombre(b), 'es')
           : b.fecha - a.fecha,
     );
-    lista.replaceChildren(...visibles.map((e) => tarjetaNivel(e, () => { pintarFiltros(); pintarLista(); }, pantallaNiveles)));
+    if (anuncios) huecos.forEach((el) => anuncios!.detach(el));
+    huecos = [];
+    const filas: HTMLElement[] = [];
+    const primero = Math.min(2, visibles.length - 1);
+    visibles.forEach((e, i) => {
+      filas.push(tarjetaNivel(e, () => { pintarFiltros(); pintarLista(); }, pantallaNiveles));
+      if (conAnuncios && (i === primero || (i > 2 && (i - 2) % 6 === 0))) {
+        const hueco = h('div', { class: 'anuncio-nativo', 'data-clave': `niveles-${huecos.length}` });
+        huecos.push(hueco);
+        filas.push(hueco);
+      }
+    });
+    lista.replaceChildren(...filas);
+    enlazarHuecos();
     if (!visibles.length) lista.replaceChildren(vacio(entradas.length ? 'Ningún nivel coincide con la búsqueda o los filtros.' : 'Aún no hay niveles. Crea uno en el Creador de niveles o abre el enlace de un nivel.'));
   };
 
@@ -237,7 +314,7 @@ function pantallaNiveles() {
         lista,
       ),
     ),
-    menu, true,
+    menu, false, limpiar,
   );
   pintarFiltros();
   pintarLista();
@@ -508,7 +585,7 @@ function creador() {
       ),
       h('div', { class: 'cuerpo' }, items.length ? lista : vacio('Todavía no has creado ningún nivel. Pulsa «Nuevo nivel» para empezar.')),
     ),
-    menu, true,
+    menu, false,
   );
 }
 
@@ -524,6 +601,7 @@ function abrirEditor(id: string) {
 }
 
 export function iniciarApp() {
+  aplicarTema();
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || document.querySelector('.modal')) return;
     const t = e.target as HTMLElement;

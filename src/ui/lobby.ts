@@ -1,11 +1,14 @@
 import { ES_WEB } from '../config';
-import { Nivel } from '../core/level';
+import { ALTO, ANCHO, Nivel } from '../core/level';
 import { PUEDE_COMPARTIR, compartir, copiar } from '../platform';
 import { Anfitrion, COLOR_PRIMARIO, COLOR_SECUNDARIO, Colores, Invitado, LARGO_NOMBRE, MAX_JUGADORES, Red, Sesion, urlDeSala } from '../red';
-import { miniatura } from '../render';
+import { C, Vista, miniatura, simEstatica } from '../render';
 import { ajustes } from '../store';
-import { aviso, botonIcono, h, icono } from './dom';
-import { montarJuego } from './juego';
+import { aHex, abrirColor as ventanaColor } from './color';
+import { aviso, botonIcono, h, icono, modal, registrarIconos } from './dom';
+import { extension, montarJuego } from './juego';
+
+registrarIconos({ corona: '<path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z" fill="currentColor"/>' });
 
 export interface OpcionesLobby {
   nivel: Nivel;
@@ -20,14 +23,81 @@ export interface OpcionesLobby {
 let nombre = ajustes.autor;
 const colores: Colores = { p: COLOR_PRIMARIO, s: COLOR_SECUNDARIO };
 
+function coloresAleatorios() {
+  const hue = Math.random() * 360;
+  colores.p = aHex(hue, 0.55 + Math.random() * 0.4, 0.5 + Math.random() * 0.4);
+  colores.s = aHex((hue + 150 + Math.random() * 60) % 360, 0.25 + Math.random() * 0.45, 0.85 + Math.random() * 0.15);
+}
+
 export function conectarSala(sala: string): Invitado {
+  nombre = ajustes.autor;
+  coloresAleatorios();
   return new Invitado(sala, nombre, colores);
+}
+
+function verNivel(nivel: Nivel, colores: Colores) {
+  const canvas = h('canvas', { class: 'lobby-vista' });
+  const m = modal(nivel.nombre || 'Nivel sin nombre', canvas, h('p', { class: 'nota' }, 'Arrastra para recorrer el nivel.'));
+  m.caja.classList.add('modal-ancho');
+  const vista = new Vista(canvas);
+  vista.completa = true;
+  vista.fondo = nivel.fondo || C.fondo;
+  const sim = simEstatica(nivel);
+  const ext = extension(nivel);
+  const margen = 100;
+  const limitar = () => {
+    const v = vista.visible();
+    const mx = (v.w - ANCHO) / 2;
+    const my = (v.h - ALTO) / 2;
+    const ajustarEje = (c: number, a: number, b: number, tam: number, m: number) =>
+      b - a + 2 * margen <= tam + 2 * m ? (a + b) / 2 - tam / 2 : Math.min(Math.max(c, a - margen + m), b + margen - tam - m);
+    vista.cx = ajustarEje(vista.cx, ext.x0, ext.x1, ANCHO, mx);
+    vista.cy = ajustarEje(vista.cy, ext.y0, ext.y1, ALTO, my);
+  };
+  const dibujar = () => {
+    limitar();
+    vista.dibujar(sim, { colores: [colores] });
+  };
+  vista.cx = nivel.inicio.x + nivel.inicio.w / 2 - ANCHO / 2;
+  vista.cy = nivel.inicio.y + nivel.inicio.h / 2 - ALTO / 2;
+
+  let previo: { x: number; y: number; id: number } | null = null;
+  canvas.addEventListener('pointerdown', (e) => {
+    previo = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!previo || previo.id !== e.pointerId) return;
+    vista.cx -= (e.clientX - previo.x) / vista.escala;
+    vista.cy -= (e.clientY - previo.y) / vista.escala;
+    previo = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    dibujar();
+  });
+  const soltar = (e: PointerEvent) => {
+    if (previo?.id === e.pointerId) previo = null;
+  };
+  canvas.addEventListener('pointerup', soltar);
+  canvas.addEventListener('pointercancel', soltar);
+
+  const observador = new ResizeObserver(() => dibujar());
+  observador.observe(canvas);
+  const vigia = new MutationObserver(() => {
+    if (m.caja.isConnected) return;
+    vigia.disconnect();
+    observador.disconnect();
+    vista.destruir();
+  });
+  vigia.observe(document.body, { childList: true });
 }
 
 export function montarLobby(raiz: HTMLElement, op: OpcionesLobby): () => void {
   let red: Red | null = null;
   let limpiar: (() => void) | null = null;
   const titulo = op.nivel.nombre || 'Nivel sin nombre';
+  if (!op.invitado) {
+    nombre = ajustes.autor;
+    coloresAleatorios();
+  }
 
   const cerrar = () => {
     limpiar?.();
@@ -60,35 +130,56 @@ export function montarLobby(raiz: HTMLElement, op: OpcionesLobby): () => void {
     const codigoSala = h('strong', {});
     const cajaQR = h('div', { class: 'lobby-qr', hidden: true });
     let urlQR = '';
-    const cajaCodigo = h('div', { class: 'lobby-codigo', hidden: true }, h('span', {}, 'Código de sala'), codigoSala, cajaQR);
+    const bCompartir = PUEDE_COMPARTIR ? h('button', { class: 'btn', onclick: () => void compartir(enlace.value, titulo) }, icono('compartir'), 'Compartir') : null;
+    const cajaCodigo = h('div', { class: 'lobby-codigo', hidden: true }, h('span', {}, 'Código de sala'), codigoSala, cajaQR, bCompartir);
     const bInvitar = h('button', { class: 'btn', onclick: () => void invitar() }, icono('enlace'), 'Invitar');
     const bEmpezar = h('button', { class: 'btn primario', onclick: () => empezar() }, icono('jugar'), 'Empezar');
+
+    const miMono = h('span', { class: 'lobby-yo-mono' });
+    const miCorona = h('span', { class: 'corona', title: 'Anfitrión', hidden: true }, icono('corona'));
+    campo.className = 'lobby-nombre';
+    campo.setAttribute('aria-label', 'Tu nombre');
 
     campo.addEventListener('input', () => {
       nombre = campo.value;
       actual.nombrar(nombre);
     });
-    const selector = (clave: keyof Colores, titulo: string) => {
-      const entrada = h('input', { type: 'color', value: colores[clave], title: titulo, 'aria-label': titulo });
-      entrada.addEventListener('input', () => {
-        colores[clave] = entrada.value;
+    const abrirColor = (clave: keyof Colores, titulo: string) => {
+      const muestra = h('span', { class: 'lobby-yo-mono lobby-modal-mono' });
+      const pintarMuestra = () => {
+        muestra.style.background = colores.p;
+        muestra.style.borderColor = colores.s;
+      };
+      pintarMuestra();
+      ventanaColor(muestra, titulo, colores[clave], (hex) => {
+        colores[clave] = hex;
         actual.colorear(colores);
+        pintarMuestra();
         pintar();
       });
-      return h('label', { class: 'lobby-color' }, entrada, titulo);
     };
+    const bColorP = h('button', { class: 'lobby-bcolor', title: 'Color principal', 'aria-label': 'Color principal', onclick: () => abrirColor('p', 'Color principal') });
+    const bColorS = h('button', { class: 'lobby-bcolor', title: 'Color secundario', 'aria-label': 'Color secundario', onclick: () => abrirColor('s', 'Color secundario') });
+
 
     const pintar = () => {
       const jugadores = actual.lista;
+      miMono.style.background = colores.p;
+      miMono.style.borderColor = colores.s;
+      bColorP.style.background = colores.p;
+      bColorS.style.background = colores.s;
+      miCorona.hidden = !actual.anfitrion;
+      const otros = jugadores.map((j, i) => ({ j, i })).filter(({ j }) => j.id !== actual.yo);
       lista.replaceChildren(
-        ...jugadores.map((j, i) =>
-          h('li', {},
-            h('span', { class: 'lobby-mono', style: `background:${j.p};border-color:${j.s}` }),
-            h('span', { class: 'nom' }, j.nombre || `Jugador ${i + 1}`),
-            i === 0 && h('span', { class: 'etq' }, 'Anfitrión'),
-            j.id === actual.yo && h('span', { class: 'etq' }, 'Tú'),
-          ),
-        ),
+        ...(otros.length
+          ? otros.map(({ j, i }) =>
+              h('li', {},
+                h('span', { class: 'lobby-mono', style: `background:${j.p};border-color:${j.s}` }),
+                h('span', { class: 'nom' }, j.nombre || `Jugador ${i + 1}`),
+                i === 0 && h('span', { class: 'corona', title: 'Anfitrión', 'aria-label': 'Anfitrión' }, icono('corona')),
+              ),
+            )
+          : [h('li', { class: 'vacia' }, 'Aún no hay nadie más en la sala.')]),
       );
       cuenta.textContent = jugadores.length ? `${jugadores.length}/${MAX_JUGADORES}` : '';
       const abierta = actual.anfitrion ? actual.codigoSala : null;
@@ -104,7 +195,11 @@ export function montarLobby(raiz: HTMLElement, op: OpcionesLobby): () => void {
           const url = (urlQR = enlace.value);
           void import('../qr').then(({ svgQR }) => {
             if (urlQR !== url) return;
-            cajaQR.innerHTML = svgQR(url);
+            try {
+              cajaQR.innerHTML = svgQR(url);
+            } catch (e) {
+              cajaQR.textContent = `No se puede generar el código QR: ${(e as Error).message}.`;
+            }
             cajaQR.hidden = false;
           });
         }
@@ -124,11 +219,9 @@ export function montarLobby(raiz: HTMLElement, op: OpcionesLobby): () => void {
       if (__OBJETIVO__ === 'web' || !actual.anfitrion || !op.codigo) return;
       bInvitar.disabled = true;
       try {
-        const url = urlDeSala(await actual.abrir());
+        await actual.abrir();
         if (red !== actual) return;
         pintar();
-        if (PUEDE_COMPARTIR && (await compartir(url, titulo))) return;
-        aviso((await copiar(url)) ? 'Enlace de la sala copiado al portapapeles' : 'No se pudo copiar el enlace');
       } catch (e) {
         aviso((e as Error).message);
       } finally {
@@ -160,19 +253,25 @@ export function montarLobby(raiz: HTMLElement, op: OpcionesLobby): () => void {
       ),
       h('div', { class: 'cuerpo' },
         h('div', { class: 'lobby-cuerpo' },
-          h('section', { class: 'lobby-nivel' },
-            miniatura(op.nivel, 360),
-            h('div', { class: 'titulo' }, h('strong', {}, titulo), h('span', {}, op.nivel.autor ? `por ${op.nivel.autor}` : 'Anónimo')),
+          h('section', { class: 'lobby-yo' },
+            miCorona,
+            h('div', { class: 'lobby-yo-fila' },
+              h('div', { class: 'lobby-yo-figura' }, miMono),
+              h('div', { class: 'lobby-bcolores' }, bColorP, bColorS),
+            ),
+            campo,
           ),
           h('section', { class: 'lobby-sala' },
+            h('button', { class: 'lobby-nivel', title: 'Ver el nivel', onclick: () => verNivel(op.nivel, colores) },
+              miniatura(op.nivel, 160),
+              h('div', { class: 'titulo' }, h('strong', {}, titulo), h('span', {}, op.nivel.autor ? `por ${op.nivel.autor}` : 'Anónimo'), h('span', { class: 'ver' }, 'Ver el nivel completo')),
+            ),
             h('h2', {}, 'Jugadores ', cuenta),
             lista,
-            h('label', { class: 'campo' }, 'Tu nombre', campo),
-            h('div', { class: 'campo' }, 'Tu monigote',
-              h('div', { class: 'fila' }, selector('p', 'Color principal'), selector('s', 'Color secundario')),
-            ),
             cajaCodigo,
             campoEnlace,
+          ),
+          h('div', { class: 'lobby-pie' },
             h('p', { class: 'error' }, error),
             estado,
             h('div', { class: 'fila fin' }, bInvitar, bEmpezar),

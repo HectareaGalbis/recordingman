@@ -1,6 +1,6 @@
-const ECC_POR_BLOQUE = [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26];
-const BLOQUES = [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5];
-const VERSION_MAX = 10;
+const ECC_POR_BLOQUE = [-1, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26];
+const BLOQUES = [-1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 6, 6, 6, 6, 7, 8, 8, 9, 9, 10, 12];
+const VERSION_MAX = 25;
 
 function modulosDatos(v: number): number {
   let n = (16 * v + 128) * v + 64;
@@ -73,7 +73,7 @@ export function matrizQR(texto: string): boolean[][] {
   const bytes = [...new TextEncoder().encode(texto)];
   let v = 1;
   while (v <= VERSION_MAX && 4 + (v < 10 ? 8 : 16) + bytes.length * 8 > palabrasDatos(v) * 8) v++;
-  if (v > VERSION_MAX) throw new Error('Texto demasiado largo para el código QR');
+  if (v > VERSION_MAX) throw new Error(`el enlace tiene ${bytes.length} caracteres y un código QR admite como máximo ${palabrasDatos(VERSION_MAX) - 3}`);
 
   const bits: number[] = [];
   const poner = (valor: number, n: number) => {
@@ -139,7 +139,7 @@ export function matrizQR(texto: string): boolean[][] {
     }),
   );
   const formato = (mascara: number) => {
-    const d = mascara;
+    const d = (1 << 3) | mascara;
     let r = d;
     for (let i = 0; i < 10; i++) r = (r << 1) ^ ((r >>> 9) * 0x537);
     const b = ((d << 10) | r) ^ 0x5412;

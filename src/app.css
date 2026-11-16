@@ -6,7 +6,7 @@
 }
 
 .titulo-boton:hover {
-  background: #eeeeee;
+  background: var(--hover);
 }
 
 .ico.peligro:hover {
@@ -166,7 +166,7 @@
 }
 
 .herr:hover {
-  background: #ececec;
+  background: var(--hover);
 }
 
 .herr.activa {
@@ -239,10 +239,28 @@
   padding: 0;
 }
 
-.color-fondo input {
+.color-actual {
+  display: inline-block;
   width: 22px;
   height: 18px;
   border-radius: 5px;
+  box-shadow: 0 0 0 1.5px var(--tinta);
+}
+
+.color-boton {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 28px;
+  padding: 0;
+  border: 1.5px solid var(--tinta);
+  border-radius: 8px;
+  background: var(--papel);
+}
+
+.color-boton .color-actual {
+  width: 34px;
+  box-shadow: none;
 }
 
 .paso {
@@ -263,7 +281,7 @@
 }
 
 .paso button:hover {
-  background: #e8e8e8;
+  background: var(--hover);
 }
 
 .paso input {
@@ -303,6 +321,12 @@
   background: var(--papel);
   font-size: 12px;
   font-weight: 600;
+}
+
+.segmentos.ancho button {
+  flex: 1;
+  height: 34px;
+  font-size: 13px;
 }
 
 .segmentos button + button {
@@ -358,7 +382,7 @@
   margin: 8px 0 0;
   padding: 10px;
   border-radius: 9px;
-  background: #f0f0f0;
+  background: var(--hover);
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.5;
@@ -370,23 +394,30 @@
 .niveles-cuerpo {
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
-  align-content: start;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
 .niveles-cuerpo > .rejilla-tarjetas {
   width: 100%;
   min-width: 0;
+  max-height: 100%;
   margin: 0;
+  padding: 20px 20px 20px 10px;
+  overflow-y: auto;
+  align-content: start;
+  grid-auto-rows: max-content;
 }
 
 .filtros {
-  position: sticky;
-  top: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-height: 100%;
+  padding: 20px 10px 20px 20px;
+  overflow-y: auto;
 }
 
 .filtros select {
@@ -469,6 +500,42 @@
   row-gap: 4px;
 }
 
+.rejilla-tarjetas.filas {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.filas .tarjeta {
+  display: flex;
+  align-items: stretch;
+}
+
+.filas .tarjeta-mini {
+  flex: none;
+  width: clamp(120px, 32%, 240px);
+  border-bottom: 0;
+  border-right: 1px solid var(--linea);
+}
+
+.filas .tarjeta-mini .miniatura {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.anuncio-nativo {
+  display: block;
+  width: 100%;
+  height: 128px;
+}
+
+.filas .tarjeta-pie {
+  flex: 1;
+  min-width: 0;
+  align-content: center;
+}
+
 .tarjeta-pie.doble .titulo {
   flex: 1 1 100%;
   padding-top: 4px;
@@ -513,10 +580,17 @@
 @media (max-width: 700px) {
   .niveles-cuerpo {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    gap: 20px;
+    padding: 20px;
+    overflow-y: auto;
   }
 
+  .niveles-cuerpo > .rejilla-tarjetas,
   .filtros {
-    position: static;
+    max-height: none;
+    padding: 0;
+    overflow: visible;
   }
 
   .filtros-lista {

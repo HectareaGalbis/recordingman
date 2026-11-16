@@ -30,7 +30,7 @@ function pedirPantallaCompleta(): Promise<unknown> {
   return document.documentElement.requestFullscreen().then(() => (screen.orientation as any)?.lock?.('landscape'));
 }
 
-function extension(n: Nivel) {
+export function extension(n: Nivel) {
   let x0 = n.inicio.x;
   let y0 = n.inicio.y;
   let x1 = x0 + n.inicio.w;
@@ -56,87 +56,35 @@ export function urlDeCodigo(codigo: string): string {
 
 export function compartirNivel(codigo: string, nombre: string, detalle = '') {
   const titulo = nombre || 'Nivel de RecordingMan';
-  let emisor: Emisor | null = null;
-  let fallo = '';
-  let url = '';
-  const incluir = h('input', { type: 'checkbox', checked: true, onchange: () => cambiar() });
-  const campo = h('input', { type: 'text', readOnly: true, onfocus: () => campo.select() });
-  const nota = h('p', { class: 'nota' });
-  const estado = h('p', { class: 'nota' });
+  const url = urlDeCodigo(codigo);
+  const campo = h('input', { type: 'text', readOnly: true, value: url, onfocus: () => campo.select() });
+  const nota = h('p', { class: 'nota' }, `${detalle}Todo el nivel viaja dentro del enlace (${url.length} caracteres). Funciona aunque no estés conectado.`);
   const qr = h('div', { class: 'compartir-qr', hidden: true });
-  let urlQR = '';
+  const sinQR = h('p', { class: 'nota', hidden: true });
   const bCopiar = h('button', { class: 'btn', onclick: () => void copiar(url).then((ok) => aviso(ok ? 'Enlace copiado' : 'No se pudo copiar')) }, 'Copiar enlace');
   const bCodigo = h('button', { class: 'btn', onclick: () => void copiar(codigo).then((ok) => aviso(ok ? 'Código del nivel copiado' : 'No se pudo copiar')) }, 'Copiar código del nivel');
   const bCompartir = PUEDE_COMPARTIR ? h('button', { class: 'btn primario', onclick: () => void compartir(url, titulo) }, icono('compartir'), 'Compartir') : null;
 
-  const pintar = () => {
-    const corto = !incluir.checked;
-    const sala = emisor?.codigoSala;
-    url = !corto ? urlDeCodigo(codigo) : sala ? urlDeEnvio(sala) : '';
-    campo.value = url;
-    bCopiar.disabled = !url;
-    bCodigo.hidden = corto;
-    if (bCompartir) bCompartir.disabled = !url;
-    nota.textContent = corto
-      ? `${detalle}El enlace solo lleva la sala: el nivel se envía directamente a quien lo abra. Deja esta ventana abierta; si sales de la app para mandarlo, vuelve a ella y quien lo abra lo recibirá.`
-      : `${detalle}Todo el nivel viaja dentro del enlace (${url.length} caracteres). Funciona aunque no estés conectado.`;
-    const n = emisor?.recibidos ?? 0;
-    estado.hidden = !corto;
-    estado.textContent = !emisor
-      ? fallo
-      : !sala
-        ? 'Abriendo sala…'
-        : !emisor.sala
-          ? 'Reconectando la sala…'
-          : n
-            ? `Recibido por ${n} ${n === 1 ? 'jugador' : 'jugadores'}.`
-            : 'Esperando a que alguien abra el enlace…';
-    qr.hidden = !(corto && url && urlQR === url);
-    if (__OBJETIVO__ !== 'web' && corto && url && urlQR !== url) {
-      const destino = (urlQR = url);
-      void import('../qr').then(({ svgQR }) => {
-        if (urlQR !== destino) return;
-        qr.innerHTML = svgQR(destino);
-        qr.hidden = incluir.checked;
-      });
-    }
-  };
+  if (__OBJETIVO__ !== 'web') {
+    void import('../qr').then(({ svgQR }) => {
+      try {
+        qr.innerHTML = svgQR(url);
+        qr.hidden = false;
+      } catch (e) {
+        qr.hidden = true;
+        sinQR.textContent = `No se puede generar el código QR: ${(e as Error).message}.`;
+        sinQR.hidden = false;
+      }
+    });
+  }
 
-  const cambiar = () => {
-    fallo = '';
-    if (incluir.checked) {
-      emisor?.cerrar();
-      emisor = null;
-    } else if (!emisor) {
-      const e = (emisor = new Emisor(codigo));
-      e.alCambiar = pintar;
-      e.abrir().catch((err: Error) => {
-        if (emisor !== e) return;
-        e.cerrar();
-        emisor = null;
-        fallo = err.message;
-        pintar();
-      });
-    }
-    pintar();
-  };
-
-  const m = modal('Compartir nivel',
-    h('label', { class: 'casilla' }, incluir, 'Incluir el nivel en el enlace'),
+  modal('Compartir nivel',
     nota,
     campo,
     qr,
-    estado,
+    sinQR,
     h('div', { class: 'fila fin' }, bCodigo, bCopiar, bCompartir),
   );
-  const vigia = new MutationObserver(() => {
-    if (m.caja.isConnected) return;
-    vigia.disconnect();
-    emisor?.cerrar();
-    emisor = null;
-  });
-  vigia.observe(document.body, { childList: true });
-  pintar();
 }
 
 export function montarJuego(raiz: HTMLElement, op: OpcionesJuego): () => void {

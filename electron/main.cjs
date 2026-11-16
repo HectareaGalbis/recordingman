@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeTheme, shell } = require('electron');
 const path = require('path');
 
 let ventana = null;
@@ -38,7 +38,7 @@ if (!app.requestSingleInstanceLock()) {
       minWidth: 800,
       minHeight: 480,
       fullscreen: true,
-      backgroundColor: '#fafafa',
+      backgroundColor: nativeTheme.shouldUseDarkColors ? '#161616' : '#fafafa',
       autoHideMenuBar: true,
       title: 'RecordingMan',
       webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true },

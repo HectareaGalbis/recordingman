@@ -8,6 +8,7 @@ import { aTexto, desdeTexto } from '../core/text';
 import { TACTIL } from '../input';
 import { copiar } from '../platform';
 import { BORDE_MOVIL, C, Vista, dibujarNivel, pinEntrada, pinSalida, simEstatica } from '../render';
+import { abrirColor } from './color';
 import { aviso, botonIcono, h, icono, modal } from './dom';
 import { compartirNivel, montarJuego } from './juego';
 
@@ -139,15 +140,16 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
   const titulo = h('button', { class: 'titulo titulo-boton', title: 'Nombre y autor', onclick: () => abrirDatos() });
   const bDeshacer = botonIcono('deshacer', 'Deshacer (Ctrl+Z)', () => saltar(-1));
   const bRehacer = botonIcono('rehacer', 'Rehacer (Ctrl+Y)', () => saltar(1));
-  const bFondo = h('input', { type: 'color', value: nivel.fondo });
-  bFondo.addEventListener('input', () => {
-    nivel.fondo = bFondo.value;
-    vista.fondo = nivel.fondo;
-  });
-  bFondo.addEventListener('change', () => {
-    nivel.fondo = bFondo.value;
-    cambio(true);
-  });
+  const bFondo = h('span', { class: 'color-actual' });
+  const elegirFondo = () => {
+    const muestra = h('span', { class: 'color-grande', style: `background:${nivel.fondo}` });
+    abrirColor(muestra, 'Color de fondo del nivel', nivel.fondo, (hex) => {
+      nivel.fondo = hex;
+      vista.fondo = hex;
+      bFondo.style.background = hex;
+      muestra.style.background = hex;
+    }, () => cambio(true));
+  };
   const capaPrueba = h('div', { class: 'capa-prueba', hidden: true });
 
   const el = h('div', { class: 'editor' },
@@ -156,7 +158,7 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
       titulo,
       h('div', { class: 'acciones' },
         bDeshacer, bRehacer,
-        h('label', { class: 'btn compacto color-fondo', title: 'Color de fondo del nivel' }, 'Fondo', bFondo),
+        h('button', { class: 'btn compacto color-fondo', title: 'Color de fondo del nivel', onclick: elegirFondo }, 'Fondo', bFondo),
         botonIcono('codigo', 'Ver o editar el código del nivel', () => abrirCodigo()),
         botonIcono('compartir', 'Compartir nivel', () => abrirCompartir()),
         h('button', { class: 'btn primario', onclick: () => probar() }, icono('jugar'), 'Probar'),
@@ -205,7 +207,7 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
     );
     bDeshacer.disabled = hi === 0;
     bRehacer.disabled = hi === historial.length - 1;
-    bFondo.value = nivel.fondo;
+    bFondo.style.background = nivel.fondo;
     vista.fondo = nivel.fondo;
   }
 
@@ -283,16 +285,18 @@ export function montarEditor(raiz: HTMLElement, inicial: Nivel, op: OpcionesEdit
   }
 
   function campoColor(etiqueta: string, valor: string, poner: (v: string) => void): HTMLElement {
-    const entrada = h('input', { type: 'color', value: valor });
-    entrada.addEventListener('input', () => {
-      poner(entrada.value);
-      cambio(false);
-    });
-    entrada.addEventListener('change', () => {
-      poner(entrada.value);
-      cambio(true);
-    });
-    return h('label', { class: 'campo-num' }, h('span', {}, etiqueta), entrada);
+    const actual = h('span', { class: 'color-actual', style: `background:${valor}` });
+    const boton = h('button', { class: 'color-boton', title: etiqueta, 'aria-label': etiqueta, onclick: () => {
+      const muestra = h('span', { class: 'color-grande', style: `background:${valor}` });
+      abrirColor(muestra, etiqueta, valor, (hex) => {
+        valor = hex;
+        poner(hex);
+        cambio(false);
+        actual.style.background = hex;
+        muestra.style.background = hex;
+      }, () => cambio(true));
+    } }, actual);
+    return h('div', { class: 'campo-num' }, h('span', {}, etiqueta), boton);
   }
 
   function campoOpciones(etiqueta: string, opciones: string[], valor: number, poner: (i: number) => void, apilado = false): HTMLElement {

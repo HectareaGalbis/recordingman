@@ -1,4 +1,4 @@
-import { ADMOB_BANNER, ADMOB_PRUEBAS, ADSENSE_CLIENTE, ADSENSE_FIN_DER, ADSENSE_FIN_IZQ, ADSENSE_PORTADA_DER, ADSENSE_PORTADA_IZQ, ADSENSE_PORTADA_MOVIL } from './config';
+import { ADMOB_NATIVO, ADMOB_NATIVO_PRUEBAS, ADMOB_PRUEBAS, ADSENSE_CLIENTE, ADSENSE_FIN_DER, ADSENSE_FIN_IZQ, ADSENSE_PORTADA_DER, ADSENSE_PORTADA_IZQ, ADSENSE_PORTADA_MOVIL } from './config';
 
 interface Escritorio {
   salir(): void;
@@ -72,6 +72,8 @@ export function salir() {
 }
 
 let bannerNativo: 'no' | 'visible' | 'oculto' = 'no';
+let marcarAdmobListo: (ok: boolean) => void = () => undefined;
+const admobListo = new Promise<boolean>((r) => (marcarAdmobListo = r));
 let deseado = false;
 
 function alto(px: number) {
@@ -142,30 +144,25 @@ export function huecoAnuncioMovil(): { el: HTMLElement | null; rellenar: () => v
 }
 
 export async function iniciarAnuncios() {
-  if (__OBJETIVO__ !== 'android') return;
+  if (__OBJETIVO__ !== 'android') return marcarAdmobListo(false);
   try {
-    const { AdMob, AdmobConsentStatus, BannerAdPluginEvents, BannerAdPosition, BannerAdSize } = await import('@capacitor-community/admob');
-    await AdMob.initialize({ initializeForTesting: ADMOB_PRUEBAS });
+    const { AdMob, AdmobConsentStatus } = await import('@capacitor-community/admob');
+    try {
+      await AdMob.initialize({ initializeForTesting: ADMOB_PRUEBAS });
+    } catch (e) {
+      marcarAdmobListo(false);
+      throw e;
+    }
     try {
       const info = await AdMob.requestConsentInfo();
       if (info.isConsentFormAvailable && info.status === AdmobConsentStatus.REQUIRED) await AdMob.showConsentForm();
     } catch {
       alto(0);
     }
-    await AdMob.addListener(BannerAdPluginEvents.SizeChanged, (t) => {
-      if (bannerNativo === 'visible') alto(t.height);
-    });
-    await AdMob.showBanner({
-      adId: ADMOB_BANNER,
-      adSize: BannerAdSize.ADAPTIVE_BANNER,
-      position: BannerAdPosition.BOTTOM_CENTER,
-      margin: 0,
-      isTesting: ADMOB_PRUEBAS,
-    });
-    bannerNativo = 'visible';
-    if (!deseado) void anuncio(false);
+    marcarAdmobListo(true);
   } catch {
     bannerNativo = 'no';
+    marcarAdmobListo(false);
   }
 }
 
@@ -185,5 +182,40 @@ export async function anuncio(visible: boolean) {
     }
   } catch {
     return;
+  }
+}
+
+export interface EstiloAnuncio {
+  fondo: string;
+  borde: string;
+  texto: string;
+  suave: string;
+  boton: string;
+  textoBoton: string;
+}
+
+export async function crearAnunciosNativos(id: string, estilo: EstiloAnuncio): Promise<import('@capacitor-community/admob').NativeAdFeed | null> {
+  if (__OBJETIVO__ !== 'android' || !(await admobListo)) return null;
+  try {
+    const { NativeAdFeed, NativeAdTemplate } = await import('@capacitor-community/admob');
+    return await NativeAdFeed.create({
+      feedId: id,
+      template: NativeAdTemplate.Small,
+      adId: ADMOB_NATIVO || undefined,
+      isTesting: ADMOB_NATIVO_PRUEBAS,
+      androidScrollSnapshot: true,
+      style: {
+        backgroundColor: estilo.fondo,
+        borderColor: estilo.borde,
+        borderWidth: 1.5,
+        cornerRadius: 12,
+        headlineColor: estilo.texto,
+        bodyColor: estilo.suave,
+        callToActionBackgroundColor: estilo.boton,
+        callToActionTextColor: estilo.textoBoton,
+      },
+    });
+  } catch {
+    return null;
   }
 }

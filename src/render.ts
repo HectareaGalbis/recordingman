@@ -672,6 +672,11 @@ export function simEstatica(nivel: Nivel): Sim {
   const quieto = { dx: 0, dy: 0, agarrar: false, reiniciar: false };
   for (let i = 0; i < 70; i++) sim.tick(quieto);
   for (const w of [...sim.paredes, ...sim.malas]) (w.rx = 0), (w.ry = 0), (w.rw = w.def.w), (w.rh = w.def.h);
+  for (const m of sim.moviles) {
+    (m.s = 0), (m.dir = 1), (m.dx = 0), (m.dy = 0);
+    for (const { o, orig } of m.miembros) Object.assign(o, orig);
+  }
+  if (sim.moviles.length) for (const c of sim.cajas) (c.x = c.def.x), (c.y = c.def.y);
   sim.jugador.r = RADIO_NORMAL;
   sim.jugador.muerto = false;
   sim.explosiones = [];

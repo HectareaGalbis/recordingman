@@ -3,7 +3,19 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-    <meta name="theme-color" content="#fafafa" />
+    <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#161616" media="(prefers-color-scheme: dark)" />
+    <script>
+      try {
+        var tema = JSON.parse(localStorage.getItem('rm.ajustes') || '{}').tema;
+        if (tema === 'claro' || tema === 'oscuro') {
+          document.documentElement.dataset.tema = tema;
+          document.querySelectorAll('meta[name="theme-color"]').forEach(function (m) {
+            m.content = tema === 'oscuro' ? '#161616' : '#fafafa';
+          });
+        }
+      } catch (e) {}
+    </script>
     <meta name="description" content="RecordingMan: grábate, llámate a ti mismo y resuelve el nivel. Juega al nivel que va dentro del enlace." />
     <meta property="og:title" content="RecordingMan" />
     <meta property="og:description" content="Te han pasado un nivel de RecordingMan. Ábrelo y juega." />

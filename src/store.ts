@@ -6,6 +6,7 @@ export interface Ajustes {
   musica: boolean;
   efectos: boolean;
   autor: string;
+  tema: 'auto' | 'claro' | 'oscuro';
 }
 
 export interface Favorito {
@@ -53,7 +54,7 @@ function escribir(clave: string, valor: unknown) {
   }
 }
 
-export const ajustes: Ajustes = { musica: true, efectos: true, autor: '', ...leer<Partial<Ajustes>>('ajustes', {}) };
+export const ajustes: Ajustes = { musica: true, efectos: true, autor: '', tema: 'auto', ...leer<Partial<Ajustes>>('ajustes', {}) };
 
 export function guardarAjustes() {
   escribir('ajustes', ajustes);
